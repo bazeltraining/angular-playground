@@ -1,3 +1,4 @@
+build --subcommands
 # Load any settings specific to the current user
 try-import .bazelrc.user
 ################################
