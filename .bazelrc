@@ -60,7 +60,7 @@ build:release --workspace_status_command="node ./tools/bazel_stamp_vars.js"
 
 # A more useful default output mode for bazel query
 # Prints eg. "ng_module rule //foo:bar" rather than just "//foo:bar"
-query --output=label_kind
+query --output=label_kind --noimplicit_deps
 
 # By default, failing tests don't print any output, it goes to the log file
 test --test_output=errors
