@@ -9,7 +9,6 @@
 import {InjectFlags, InjectionToken, Injector} from '../di';
 import {resolveForwardRef} from '../di/forward_ref';
 import {Type} from '../interface/type';
-import {QueryList} from '../linker';
 import {validateAttribute, validateProperty} from '../sanitization/sanitization';
 import {Sanitizer} from '../sanitization/security';
 import {StyleSanitizeFn} from '../sanitization/style_sanitizer';
@@ -32,17 +31,16 @@ import {CssSelectorList, NG_PROJECT_AS_ATTR_NAME} from './interfaces/projection'
 import {LQueries} from './interfaces/query';
 import {GlobalTargetResolver, ProceduralRenderer3, RComment, RElement, RText, Renderer3, RendererFactory3, isProceduralRenderer} from './interfaces/renderer';
 import {SanitizerFn} from './interfaces/sanitization';
-import {BINDING_INDEX, CLEANUP, CONTAINER_INDEX, CONTENT_QUERIES, CONTEXT, DECLARATION_VIEW, FLAGS, HEADER_OFFSET, HOST, HOST_NODE, INJECTOR, LView, LViewFlags, NEXT, OpaqueViewState, PARENT, QUERIES, RENDERER, RENDERER_FACTORY, RootContext, RootContextFlags, SANITIZER, TAIL, TVIEW, TView} from './interfaces/view';
+import {BINDING_INDEX, CLEANUP, CONTAINER_INDEX, CONTENT_QUERIES, CONTEXT, DECLARATION_VIEW, FLAGS, HEADER_OFFSET, HOST, HOST_NODE, INJECTOR, InitPhaseState, LView, LViewFlags, NEXT, OpaqueViewState, PARENT, QUERIES, RENDERER, RENDERER_FACTORY, RootContext, RootContextFlags, SANITIZER, TAIL, TData, TVIEW, TView} from './interfaces/view';
 import {assertNodeOfPossibleTypes, assertNodeType} from './node_assert';
 import {appendChild, appendProjectedNode, createTextNode, getLViewChild, insertView, removeView} from './node_manipulation';
 import {isNodeMatchingSelectorList, matchingSelectorIndex} from './node_selector_matcher';
-import {OnChangesDirectiveWrapper, isOnChangesDirectiveWrapper, recordChange, unwrapOnChangesDirectiveWrapper} from './onchanges_util';
-import {decreaseElementDepthCount, enterView, getBindingsEnabled, getCheckNoChangesMode, getContextLView, getCurrentDirectiveDef, getElementDepthCount, getFirstTemplatePass, getIsParent, getLView, getPreviousOrParentTNode, increaseElementDepthCount, isCreationMode, leaveView, nextContextImpl, resetComponentState, setBindingRoot, setCheckNoChangesMode, setCurrentDirectiveDef, setFirstTemplatePass, setIsParent, setPreviousOrParentTNode} from './state';
+import {decreaseElementDepthCount, enterView, getBindingsEnabled, getCheckNoChangesMode, getContextLView, getCurrentDirectiveDef, getCurrentQueryIndex, getElementDepthCount, getIsParent, getLView, getPreviousOrParentTNode, increaseElementDepthCount, isCreationMode, leaveView, nextContextImpl, resetComponentState, setBindingRoot, setCheckNoChangesMode, setCurrentDirectiveDef, setCurrentQueryIndex, setIsParent, setPreviousOrParentTNode} from './state';
 import {getInitialClassNameValue, initializeStaticContext as initializeStaticStylingContext, patchContextWithStaticAttrs, renderInitialStylesAndClasses, renderStyling, updateClassProp as updateElementClassProp, updateContextWithBindings, updateStyleProp as updateElementStyleProp, updateStylingMap} from './styling/class_and_style_bindings';
 import {BoundPlayerFactory} from './styling/player_factory';
 import {createEmptyStylingContext, getStylingContext, hasClassInput, hasStyling, isAnimationProp} from './styling/util';
 import {NO_CHANGE} from './tokens';
-import {findComponentView, getComponentViewByIndex, getNativeByIndex, getNativeByTNode, getRootContext, getRootView, getTNode, isComponent, isComponentDef, isContentQueryHost, loadInternal, readElementValue, readPatchedLView, renderStringify} from './util';
+import {INTERPOLATION_DELIMITER, findComponentView, getComponentViewByIndex, getNativeByIndex, getNativeByTNode, getRootContext, getRootView, getTNode, isComponent, isComponentDef, isContentQueryHost, loadInternal, readElementValue, readPatchedLView, renderStringify} from './util';
 
 
 
@@ -67,7 +65,9 @@ export function refreshDescendantViews(lView: LView) {
   const tView = lView[TVIEW];
   // This needs to be set before children are processed to support recursive components
   tView.firstTemplatePass = false;
-  setFirstTemplatePass(false);
+
+  // Resetting the bindingIndex of the current LView as the next steps may trigger change detection.
+  lView[BINDING_INDEX] = tView.bindingStartIndex;
 
   // If this is a creation pass, we should not call lifecycle hooks or evaluate bindings.
   // This will be done in the update pass.
@@ -81,7 +81,9 @@ export function refreshDescendantViews(lView: LView) {
     // Content query results must be refreshed before content hooks are called.
     refreshContentQueries(tView);
 
-    executeHooks(lView, tView.contentHooks, tView.contentCheckHooks, checkNoChangesMode);
+    executeHooks(
+        lView, tView.contentHooks, tView.contentCheckHooks, checkNoChangesMode,
+        InitPhaseState.AfterContentInitHooksToBeRun);
 
     setHostBindings(tView, lView);
   }
@@ -121,7 +123,7 @@ export function setHostBindings(tView: TView, viewData: LView): void {
         if (instruction !== null) {
           viewData[BINDING_INDEX] = bindingRootIndex;
           instruction(
-              RenderFlags.Update, unwrapOnChangesDirectiveWrapper(viewData[currentDirectiveIndex]),
+              RenderFlags.Update, readElementValue(viewData[currentDirectiveIndex]),
               currentElementIndex);
         }
         currentDirectiveIndex++;
@@ -133,12 +135,11 @@ export function setHostBindings(tView: TView, viewData: LView): void {
 /** Refreshes content queries for all directives in the given view. */
 function refreshContentQueries(tView: TView): void {
   if (tView.contentQueries != null) {
-    for (let i = 0; i < tView.contentQueries.length; i += 2) {
+    setCurrentQueryIndex(0);
+    for (let i = 0; i < tView.contentQueries.length; i++) {
       const directiveDefIdx = tView.contentQueries[i];
       const directiveDef = tView.data[directiveDefIdx] as DirectiveDef<any>;
-
-      directiveDef.contentQueriesRefresh !(
-          directiveDefIdx - HEADER_OFFSET, tView.contentQueries[i + 1]);
+      directiveDef.contentQueriesRefresh !(directiveDefIdx - HEADER_OFFSET);
     }
   }
 }
@@ -157,8 +158,7 @@ export function createLView<T>(
     rendererFactory?: RendererFactory3 | null, renderer?: Renderer3 | null,
     sanitizer?: Sanitizer | null, injector?: Injector | null): LView {
   const lView = tView.blueprint.slice() as LView;
-  lView[FLAGS] = flags | LViewFlags.CreationMode | LViewFlags.Attached | LViewFlags.RunInit |
-      LViewFlags.FirstLViewPass;
+  lView[FLAGS] = flags | LViewFlags.CreationMode | LViewFlags.Attached | LViewFlags.FirstLViewPass;
   lView[PARENT] = lView[DECLARATION_VIEW] = parentLView;
   lView[CONTEXT] = context;
   lView[RENDERER_FACTORY] = (rendererFactory || parentLView && parentLView[RENDERER_FACTORY]) !;
@@ -206,17 +206,24 @@ export function createNodeAtIndex(
       assertLessThan(adjustedIndex, lView.length, `Slot should have been initialized with null`);
   lView[adjustedIndex] = native;
 
+  const previousOrParentTNode = getPreviousOrParentTNode();
+  const isParent = getIsParent();
   let tNode = tView.data[adjustedIndex] as TNode;
   if (tNode == null) {
-    // TODO(misko): Refactor createTNode so that it does not depend on LView.
-    tNode = tView.data[adjustedIndex] = createTNode(lView, type, adjustedIndex, name, attrs, null);
+    const parent =
+        isParent ? previousOrParentTNode : previousOrParentTNode && previousOrParentTNode.parent;
+
+    // Parents cannot cross component boundaries because components will be used in multiple places,
+    // so it's only set if the view is the same.
+    const parentInSameView = parent && parent !== lView[HOST_NODE];
+    const tParentNode = parentInSameView ? parent as TElementNode | TContainerNode : null;
+
+    tNode = tView.data[adjustedIndex] = createTNode(tParentNode, type, adjustedIndex, name, attrs);
   }
 
   // Now link ourselves into the tree.
   // We need this even if tNode exists, otherwise we might end up pointing to unexisting tNodes when
   // we use i18n (especially with ICU expressions that update the DOM during the update phase).
-  const previousOrParentTNode = getPreviousOrParentTNode();
-  const isParent = getIsParent();
   if (previousOrParentTNode) {
     if (isParent && previousOrParentTNode.child == null &&
         (tNode.parent !== null || previousOrParentTNode.type === TNodeType.View)) {
@@ -237,14 +244,20 @@ export function createNodeAtIndex(
       TProjectionNode & TIcuContainerNode;
 }
 
-export function createViewNode(index: number, view: LView) {
+export function assignTViewNodeToLView(
+    tView: TView, tParentNode: TNode | null, index: number, lView: LView): TViewNode {
   // View nodes are not stored in data because they can be added / removed at runtime (which
   // would cause indices to change). Their TNodes are instead stored in tView.node.
-  if (view[TVIEW].node == null) {
-    view[TVIEW].node = createTNode(view, TNodeType.View, index, null, null, null) as TViewNode;
+  let tNode = tView.node;
+  if (tNode == null) {
+    ngDevMode && tParentNode &&
+        assertNodeOfPossibleTypes(tParentNode, TNodeType.Element, TNodeType.Container);
+    tView.node = tNode = createTNode(
+        tParentNode as TElementNode | TContainerNode | null,  //
+        TNodeType.View, index, null, null) as TViewNode;
   }
 
-  return view[HOST_NODE] = view[TVIEW].node as TViewNode;
+  return lView[HOST_NODE] = tNode as TViewNode;
 }
 
 
@@ -324,7 +337,7 @@ export function createEmbeddedViewAndNode<T>(
   if (queries) {
     lView[QUERIES] = queries.createView();
   }
-  createViewNode(-1, lView);
+  assignTViewNodeToLView(tView, null, -1, lView);
 
   if (tView.firstTemplatePass) {
     tView.node !.injectorIndex = injectorIndex;
@@ -365,7 +378,6 @@ export function renderEmbeddedTemplate<T>(viewToRender: LView, tView: TView, con
       // off firstTemplatePass. If we don't set it here, instances will perform directive
       // matching, etc again and again.
       viewToRender[TVIEW].firstTemplatePass = false;
-      setFirstTemplatePass(false);
 
       refreshDescendantViews(viewToRender);
     } finally {
@@ -501,6 +513,11 @@ export function elementContainerStart(
   appendChild(native, tNode, lView);
   createDirectivesAndLocals(tView, lView, localRefs);
   attachPatchData(native, lView);
+
+  const currentQueries = lView[QUERIES];
+  if (currentQueries) {
+    currentQueries.addNode(tNode);
+  }
 }
 
 /** Mark the end of the <ng-container>. */
@@ -519,7 +536,8 @@ export function elementContainerEnd(): void {
   ngDevMode && assertNodeType(previousOrParentTNode, TNodeType.ElementContainer);
   const currentQueries = lView[QUERIES];
   if (currentQueries) {
-    lView[QUERIES] = currentQueries.addNode(previousOrParentTNode as TElementContainerNode);
+    lView[QUERIES] =
+        isContentQueryHost(previousOrParentTNode) ? currentQueries.parent : currentQueries;
   }
 
   registerPostOrderHooks(tView, previousOrParentTNode);
@@ -593,6 +611,11 @@ export function elementStart(
   if (tNode.stylingTemplate && (tNode.flags & TNodeFlags.hasClassInput) === 0) {
     renderInitialStylesAndClasses(native, tNode.stylingTemplate, lView[RENDERER]);
   }
+
+  const currentQueries = lView[QUERIES];
+  if (currentQueries) {
+    currentQueries.addNode(tNode);
+  }
 }
 
 /**
@@ -628,7 +651,7 @@ function createDirectivesAndLocals(
     localRefExtractor: LocalRefExtractor = getNativeByTNode) {
   if (!getBindingsEnabled()) return;
   const previousOrParentTNode = getPreviousOrParentTNode();
-  if (getFirstTemplatePass()) {
+  if (tView.firstTemplatePass) {
     ngDevMode && ngDevMode.firstTemplatePass++;
 
     resolveDirectives(
@@ -720,13 +743,13 @@ export function createTView(
     template: templateFn,
     viewQuery: viewQuery,
     node: null !,
-    data: blueprint.slice(),  // Fill in to match HEADER_OFFSET in LView
-    childIndex: -1,           // Children set in addToViewTree(), if any
+    data: blueprint.slice().fill(null, bindingStartIndex),
+    childIndex: -1,  // Children set in addToViewTree(), if any
     bindingStartIndex: bindingStartIndex,
+    viewQueryStartIndex: initialViewLength,
     expandoStartIndex: initialViewLength,
     expandoInstructions: null,
     firstTemplatePass: true,
-    changesHooks: null,
     initHooks: null,
     checkHooks: null,
     contentHooks: null,
@@ -961,18 +984,16 @@ function listenerInternal(
     const propsLength = props.length;
     if (propsLength) {
       const lCleanup = getCleanup(lView);
-      // Subscribe to listeners for each output, and setup clean up for each.
-      for (let i = 0; i < propsLength;) {
-        const directiveIndex = props[i++] as number;
-        const minifiedName = props[i++] as string;
-        const declaredName = props[i++] as string;
-        ngDevMode && assertDataInRange(lView, directiveIndex as number);
-        const directive = unwrapOnChangesDirectiveWrapper(lView[directiveIndex]);
-        const output = directive[minifiedName];
+      for (let i = 0; i < propsLength; i += 3) {
+        const index = props[i] as number;
+        ngDevMode && assertDataInRange(lView, index);
+        const minifiedName = props[i + 2];
+        const directiveInstance = lView[index];
+        const output = directiveInstance[minifiedName];
 
         if (ngDevMode && !isObservable(output)) {
           throw new Error(
-              `@Output ${minifiedName} not initialized in '${directive.constructor.name}'.`);
+              `@Output ${minifiedName} not initialized in '${directiveInstance.constructor.name}'.`);
         }
 
         const subscription = output.subscribe(listenerFn);
@@ -1030,7 +1051,8 @@ export function elementEnd(): void {
   const lView = getLView();
   const currentQueries = lView[QUERIES];
   if (currentQueries) {
-    lView[QUERIES] = currentQueries.addNode(previousOrParentTNode as TElementNode);
+    lView[QUERIES] =
+        isContentQueryHost(previousOrParentTNode) ? currentQueries.parent : currentQueries;
   }
 
   registerPostOrderHooks(getLView()[TVIEW], previousOrParentTNode);
@@ -1042,7 +1064,7 @@ export function elementEnd(): void {
   if (hasClassInput(previousOrParentTNode)) {
     const stylingContext = getStylingContext(previousOrParentTNode.index, lView);
     setInputsForProperty(
-        lView, previousOrParentTNode.inputs !, 'class', getInitialClassNameValue(stylingContext));
+        lView, previousOrParentTNode.inputs !['class'] !, getInitialClassNameValue(stylingContext));
   }
 }
 
@@ -1054,9 +1076,11 @@ export function elementEnd(): void {
  * @param value value The attribute is removed when value is `null` or `undefined`.
  *                  Otherwise the attribute value is set to the stringified value.
  * @param sanitizer An optional function used to sanitize the value.
+ * @param namespace Optional namespace to use when setting the attribute.
  */
 export function elementAttribute(
-    index: number, name: string, value: any, sanitizer?: SanitizerFn | null): void {
+    index: number, name: string, value: any, sanitizer?: SanitizerFn | null,
+    namespace?: string): void {
   if (value !== NO_CHANGE) {
     ngDevMode && validateAttribute(name);
     const lView = getLView();
@@ -1064,15 +1088,21 @@ export function elementAttribute(
     const element = getNativeByIndex(index, lView);
     if (value == null) {
       ngDevMode && ngDevMode.rendererRemoveAttribute++;
-      isProceduralRenderer(renderer) ? renderer.removeAttribute(element, name) :
+      isProceduralRenderer(renderer) ? renderer.removeAttribute(element, name, namespace) :
                                        element.removeAttribute(name);
     } else {
       ngDevMode && ngDevMode.rendererSetAttribute++;
       const tNode = getTNode(index, lView);
       const strValue =
           sanitizer == null ? renderStringify(value) : sanitizer(value, tNode.tagName || '', name);
-      isProceduralRenderer(renderer) ? renderer.setAttribute(element, name, strValue) :
-                                       element.setAttribute(name, strValue);
+
+
+      if (isProceduralRenderer(renderer)) {
+        renderer.setAttribute(element, name, strValue, namespace);
+      } else {
+        namespace ? element.setAttributeNS(namespace, name, strValue) :
+                    element.setAttribute(name, strValue);
+      }
     }
   }
 }
@@ -1137,7 +1167,7 @@ function elementPropertyInternal<T>(
   let dataValue: PropertyAliasValue|undefined;
   if (!nativeOnly && (inputData = initializeTNodeInputs(tNode)) &&
       (dataValue = inputData[propName])) {
-    setInputsForProperty(lView, inputData, propName, value);
+    setInputsForProperty(lView, dataValue, value);
     if (isComponent(tNode)) markDirtyIfOnPush(lView, index + HEADER_OFFSET);
     if (ngDevMode) {
       if (tNode.type === TNodeType.Element || tNode.type === TNodeType.Container) {
@@ -1149,6 +1179,9 @@ function elementPropertyInternal<T>(
       validateProperty(propName);
       ngDevMode.rendererSetProperty++;
     }
+
+    savePropertyDebugData(tNode, lView, propName, lView[TVIEW].data, nativeOnly);
+
     const renderer = loadRendererFn ? loadRendererFn(tNode, lView) : lView[RENDERER];
     // It is assumed that the sanitizer is only added when the compiler determines that the property
     // is risky, so sanitization can be done without further checks.
@@ -1158,6 +1191,34 @@ function elementPropertyInternal<T>(
     } else if (!isAnimationProp(propName)) {
       (element as RElement).setProperty ? (element as any).setProperty(propName, value) :
                                           (element as any)[propName] = value;
+    }
+  }
+}
+
+/**
+ * Stores debugging data for this property binding on first template pass.
+ * This enables features like DebugElement.properties.
+ */
+function savePropertyDebugData(
+    tNode: TNode, lView: LView, propName: string, tData: TData,
+    nativeOnly: boolean | undefined): void {
+  const lastBindingIndex = lView[BINDING_INDEX] - 1;
+
+  // Bind/interpolation functions save binding metadata in the last binding index,
+  // but leave the property name blank. If the interpolation delimiter is at the 0
+  // index, we know that this is our first pass and the property name still needs to
+  // be set.
+  const bindingMetadata = tData[lastBindingIndex] as string;
+  if (bindingMetadata[0] == INTERPOLATION_DELIMITER) {
+    tData[lastBindingIndex] = propName + bindingMetadata;
+
+    // We don't want to store indices for host bindings because they are stored in a
+    // different part of LView (the expando section).
+    if (!nativeOnly) {
+      if (tNode.propertyMetadataStartIndex == -1) {
+        tNode.propertyMetadataStartIndex = lastBindingIndex;
+      }
+      tNode.propertyMetadataEndIndex = lastBindingIndex + 1;
     }
   }
 }
@@ -1173,24 +1234,17 @@ function elementPropertyInternal<T>(
  * @returns the TNode object
  */
 export function createTNode(
-    lView: LView, type: TNodeType, adjustedIndex: number, tagName: string | null,
-    attrs: TAttributes | null, tViews: TView[] | null): TNode {
-  const previousOrParentTNode = getPreviousOrParentTNode();
+    tParent: TElementNode | TContainerNode | null, type: TNodeType, adjustedIndex: number,
+    tagName: string | null, attrs: TAttributes | null): TNode {
   ngDevMode && ngDevMode.tNode++;
-  const parent =
-      getIsParent() ? previousOrParentTNode : previousOrParentTNode && previousOrParentTNode.parent;
-
-  // Parents cannot cross component boundaries because components will be used in multiple places,
-  // so it's only set if the view is the same.
-  const parentInSameView = parent && lView && parent !== lView[HOST_NODE];
-  const tParent = parentInSameView ? parent as TElementNode | TContainerNode : null;
-
   return {
     type: type,
     index: adjustedIndex,
     injectorIndex: tParent ? tParent.injectorIndex : -1,
     directiveStart: -1,
     directiveEnd: -1,
+    propertyMetadataStartIndex: -1,
+    propertyMetadataEndIndex: -1,
     flags: 0,
     providerIndexes: 0,
     tagName: tagName,
@@ -1199,7 +1253,7 @@ export function createTNode(
     initialInputs: undefined,
     inputs: undefined,
     outputs: undefined,
-    tViews: tViews,
+    tViews: null,
     next: null,
     child: null,
     parent: tParent,
@@ -1215,30 +1269,32 @@ export function createTNode(
  * @param lView the `LView` which contains the directives.
  * @param inputAliases mapping between the public "input" name and privately-known,
  * possibly minified, property names to write to.
- * @param publicName public binding name. (This is the `<div [publicName]=value>`)
  * @param value Value to set.
  */
-function setInputsForProperty(
-    lView: LView, inputAliases: PropertyAliases, publicName: string, value: any): void {
-  const inputs = inputAliases[publicName];
+function setInputsForProperty(lView: LView, inputs: PropertyAliasValue, value: any): void {
+  const tView = lView[TVIEW];
   for (let i = 0; i < inputs.length;) {
-    const directiveIndex = inputs[i++] as number;
+    const index = inputs[i++] as number;
+    const publicName = inputs[i++] as string;
     const privateName = inputs[i++] as string;
-    const declaredName = inputs[i++] as string;
-    ngDevMode && assertDataInRange(lView, directiveIndex);
-    recordChangeAndUpdateProperty(lView[directiveIndex], declaredName, privateName, value);
+    const instance = lView[index];
+    ngDevMode && assertDataInRange(lView, index);
+    const def = tView.data[index] as DirectiveDef<any>;
+    const setInput = def.setInput;
+    if (setInput) {
+      def.setInput !(instance, value, publicName, privateName);
+    } else {
+      instance[privateName] = value;
+    }
   }
 }
 
 function setNgReflectProperties(
     lView: LView, element: RElement | RComment, type: TNodeType, inputs: PropertyAliasValue,
     value: any) {
-  for (let i = 0; i < inputs.length;) {
-    const directiveIndex = inputs[i++] as number;
-    const privateName = inputs[i++] as string;
-    const declaredName = inputs[i++] as string;
+  for (let i = 0; i < inputs.length; i += 3) {
     const renderer = lView[RENDERER];
-    const attrName = normalizeDebugBindingName(privateName);
+    const attrName = normalizeDebugBindingName(inputs[i + 2] as string);
     const debugValue = normalizeDebugBindingValue(value);
     if (type === TNodeType.Element) {
       isProceduralRenderer(renderer) ?
@@ -1274,20 +1330,15 @@ function generatePropertyAliases(tNode: TNode, direction: BindingDirection): Pro
 
     for (let i = start; i < end; i++) {
       const directiveDef = defs[i] as DirectiveDef<any>;
-      const publicToMinifiedNames: {[publicName: string]: string} =
+      const propertyAliasMap: {[publicName: string]: string} =
           isInput ? directiveDef.inputs : directiveDef.outputs;
-      const publicToDeclaredNames: {[publicName: string]: string}|null =
-          isInput ? directiveDef.declaredInputs : null;
-      for (let publicName in publicToMinifiedNames) {
-        if (publicToMinifiedNames.hasOwnProperty(publicName)) {
+      for (let publicName in propertyAliasMap) {
+        if (propertyAliasMap.hasOwnProperty(publicName)) {
           propStore = propStore || {};
-          const minifiedName = publicToMinifiedNames[publicName];
-          const declaredName =
-              publicToDeclaredNames ? publicToDeclaredNames[publicName] : minifiedName;
-          const aliases: PropertyAliasValue = propStore.hasOwnProperty(publicName) ?
-              propStore[publicName] :
-              propStore[publicName] = [];
-          aliases.push(i, minifiedName, declaredName);
+          const internalName = propertyAliasMap[publicName];
+          const hasProperty = propStore.hasOwnProperty(publicName);
+          hasProperty ? propStore[publicName].push(i, publicName, internalName) :
+                        (propStore[publicName] = [i, publicName, internalName]);
         }
       }
     }
@@ -1514,7 +1565,7 @@ export function elementStylingMap<T>(
     const initialClasses = getInitialClassNameValue(stylingContext);
     const classInputVal =
         (initialClasses.length ? (initialClasses + ' ') : '') + (classes as string);
-    setInputsForProperty(lView, tNode.inputs !, 'class', classInputVal);
+    setInputsForProperty(lView, tNode.inputs !['class'] !, classInputVal);
   } else {
     updateStylingMap(stylingContext, classes, styles);
   }
@@ -1600,7 +1651,7 @@ function resolveDirectives(
     tView: TView, viewData: LView, directives: DirectiveDef<any>[] | null, tNode: TNode,
     localRefs: string[] | null): void {
   // Please make sure to have explicit type for `exportsMap`. Inferred type triggers bug in tsickle.
-  ngDevMode && assertEqual(getFirstTemplatePass(), true, 'should run on first template pass only');
+  ngDevMode && assertEqual(tView.firstTemplatePass, true, 'should run on first template pass only');
   const exportsMap: ({[key: string]: number} | null) = localRefs ? {'': -1} : null;
   if (directives) {
     initNodeFlags(tNode, tView.data.length, directives.length);
@@ -1637,7 +1688,7 @@ function resolveDirectives(
 function instantiateAllDirectives(tView: TView, lView: LView, tNode: TNode) {
   const start = tNode.directiveStart;
   const end = tNode.directiveEnd;
-  if (!getFirstTemplatePass() && start < end) {
+  if (!tView.firstTemplatePass && start < end) {
     getOrCreateNodeInjectorForNode(
         tNode as TElementNode | TContainerNode | TElementContainerNode, lView);
   }
@@ -1647,7 +1698,6 @@ function instantiateAllDirectives(tView: TView, lView: LView, tNode: TNode) {
       addComponentLogic(lView, tNode, def as ComponentDef<any>);
     }
     const directive = getNodeInjectable(tView.data, lView !, i, tNode as TElementNode);
-
     postProcessDirective(lView, directive, def, i);
   }
 }
@@ -1656,10 +1706,10 @@ function invokeDirectivesHostBindings(tView: TView, viewData: LView, tNode: TNod
   const start = tNode.directiveStart;
   const end = tNode.directiveEnd;
   const expando = tView.expandoInstructions !;
-  const firstTemplatePass = getFirstTemplatePass();
+  const firstTemplatePass = tView.firstTemplatePass;
   for (let i = start; i < end; i++) {
     const def = tView.data[i] as DirectiveDef<any>;
-    const directive = unwrapOnChangesDirectiveWrapper(viewData[i]);
+    const directive = viewData[i];
     if (def.hostBindings) {
       const previousExpandoLength = expando.length;
       setCurrentDirectiveDef(def);
@@ -1704,7 +1754,7 @@ export function generateExpandoInstructionBlock(
 */
 function prefillHostVars(tView: TView, lView: LView, totalHostVars: number): void {
   ngDevMode &&
-      assertEqual(getFirstTemplatePass(), true, 'Should only be called in first template pass.');
+      assertEqual(tView.firstTemplatePass, true, 'Should only be called in first template pass.');
   for (let i = 0; i < totalHostVars; i++) {
     lView.push(NO_CHANGE);
     tView.blueprint.push(NO_CHANGE);
@@ -1716,17 +1766,12 @@ function prefillHostVars(tView: TView, lView: LView, totalHostVars: number): voi
  * Process a directive on the current node after its creation.
  */
 function postProcessDirective<T>(
-    lView: LView, directive: T, def: DirectiveDef<T>, directiveDefIdx: number): void {
-  if (def.onChanges) {
-    // We have onChanges, wrap it so that we can track changes.
-    lView[directiveDefIdx] = new OnChangesDirectiveWrapper(lView[directiveDefIdx]);
-  }
-
+    viewData: LView, directive: T, def: DirectiveDef<T>, directiveDefIdx: number): void {
   const previousOrParentTNode = getPreviousOrParentTNode();
-  postProcessBaseDirective(lView, previousOrParentTNode, directive, def);
+  postProcessBaseDirective(viewData, previousOrParentTNode, directive, def);
   ngDevMode && assertDefined(previousOrParentTNode, 'previousOrParentTNode');
   if (previousOrParentTNode && previousOrParentTNode.attrs) {
-    setInputsFromAttrs(lView, directiveDefIdx, def, previousOrParentTNode);
+    setInputsFromAttrs(directiveDefIdx, directive, def, previousOrParentTNode);
   }
 
   if (def.contentQueries) {
@@ -1734,7 +1779,7 @@ function postProcessDirective<T>(
   }
 
   if (isComponentDef(def)) {
-    const componentView = getComponentViewByIndex(previousOrParentTNode.index, lView);
+    const componentView = getComponentViewByIndex(previousOrParentTNode.index, viewData);
     componentView[CONTEXT] = directive;
   }
 }
@@ -1765,7 +1810,7 @@ function postProcessBaseDirective<T>(
 */
 function findDirectiveMatches(tView: TView, viewData: LView, tNode: TNode): DirectiveDef<any>[]|
     null {
-  ngDevMode && assertEqual(getFirstTemplatePass(), true, 'should run on first template pass only');
+  ngDevMode && assertEqual(tView.firstTemplatePass, true, 'should run on first template pass only');
   const registry = tView.directiveRegistry;
   let matches: any[]|null = null;
   if (registry) {
@@ -1796,9 +1841,9 @@ function findDirectiveMatches(tView: TView, viewData: LView, tNode: TNode): Dire
 
 /** Stores index of component's host element so it will be queued for view refresh during CD. */
 export function queueComponentIndexForCheck(previousOrParentTNode: TNode): void {
-  ngDevMode &&
-      assertEqual(getFirstTemplatePass(), true, 'Should only be called in first template pass.');
   const tView = getLView()[TVIEW];
+  ngDevMode &&
+      assertEqual(tView.firstTemplatePass, true, 'Should only be called in first template pass.');
   (tView.components || (tView.components = [])).push(previousOrParentTNode.index);
 }
 
@@ -1809,7 +1854,7 @@ export function queueComponentIndexForCheck(previousOrParentTNode: TNode): void 
 function queueHostBindingForCheck(
     tView: TView, def: DirectiveDef<any>| ComponentDef<any>, hostVars: number): void {
   ngDevMode &&
-      assertEqual(getFirstTemplatePass(), true, 'Should only be called in first template pass.');
+      assertEqual(tView.firstTemplatePass, true, 'Should only be called in first template pass.');
   const expando = tView.expandoInstructions !;
   const length = expando.length;
   // Check whether a given `hostBindings` function already exists in expandoInstructions,
@@ -1864,7 +1909,6 @@ function saveNameToExportMap(
  * @param index the initial index
  */
 export function initNodeFlags(tNode: TNode, index: number, numberOfDirectives: number) {
-  ngDevMode && assertEqual(getFirstTemplatePass(), true, 'expected firstTemplatePass to be true');
   const flags = tNode.flags;
   ngDevMode && assertEqual(
                    flags === 0 || flags === TNodeFlags.isComponent, true,
@@ -1913,7 +1957,7 @@ function addComponentLogic<T>(
   componentView[HOST] = lView[previousOrParentTNode.index];
   lView[previousOrParentTNode.index] = componentView;
 
-  if (getFirstTemplatePass()) {
+  if (lView[TVIEW].firstTemplatePass) {
     queueComponentIndexForCheck(previousOrParentTNode);
   }
 }
@@ -1927,51 +1971,26 @@ function addComponentLogic<T>(
  * @param tNode The static data for this node
  */
 function setInputsFromAttrs<T>(
-    lView: LView, directiveIndex: number, def: DirectiveDef<any>, tNode: TNode): void {
+    directiveIndex: number, instance: T, def: DirectiveDef<T>, tNode: TNode): void {
   let initialInputData = tNode.initialInputs as InitialInputData | undefined;
   if (initialInputData === undefined || directiveIndex >= initialInputData.length) {
-    initialInputData = generateInitialInputs(directiveIndex, def, tNode);
+    initialInputData = generateInitialInputs(directiveIndex, def.inputs, tNode);
   }
 
   const initialInputs: InitialInputs|null = initialInputData[directiveIndex];
   if (initialInputs) {
-    const directiveOrWrappedDirective = lView[directiveIndex];
-
+    const setInput = def.setInput;
     for (let i = 0; i < initialInputs.length;) {
+      const publicName = initialInputs[i++];
       const privateName = initialInputs[i++];
-      const declaredName = initialInputs[i++];
-      const attrValue = initialInputs[i++];
-      recordChangeAndUpdateProperty(
-          directiveOrWrappedDirective, declaredName, privateName, attrValue);
+      const value = initialInputs[i++];
+      if (setInput) {
+        def.setInput !(instance, value, publicName, privateName);
+      } else {
+        (instance as any)[privateName] = value;
+      }
     }
   }
-}
-
-/**
- * Checks to see if the instanced passed as `directiveOrWrappedDirective` is wrapped in {@link
- * OnChangesDirectiveWrapper} or not.
- * If it is, it will update the related {@link SimpleChanges} object with the change to signal
- * `ngOnChanges` hook
- * should fire, then it will unwrap the instance. After that, it will set the property with the key
- * provided
- * in `privateName` on the instance with the passed value.
- * @param directiveOrWrappedDirective The directive instance or a directive instance wrapped in
- * {@link OnChangesDirectiveWrapper}
- * @param declaredName The original, declared name of the property to update.
- * @param privateName The private, possibly minified name of the property to update.
- * @param value The value to update the property with.
- */
-function recordChangeAndUpdateProperty<T, K extends keyof T>(
-    directiveOrWrappedDirective: OnChangesDirectiveWrapper<T>| T, declaredName: string,
-    privateName: K, value: any) {
-  let instance: T;
-  if (isOnChangesDirectiveWrapper(directiveOrWrappedDirective)) {
-    instance = unwrapOnChangesDirectiveWrapper(directiveOrWrappedDirective);
-    recordChange(directiveOrWrappedDirective, declaredName, value);
-  } else {
-    instance = directiveOrWrappedDirective;
-  }
-  instance[privateName] = value;
 }
 
 /**
@@ -1990,7 +2009,7 @@ function recordChangeAndUpdateProperty<T, K extends keyof T>(
  * @param tNode The static data on this node
  */
 function generateInitialInputs(
-    directiveIndex: number, directiveDef: DirectiveDef<any>, tNode: TNode): InitialInputData {
+    directiveIndex: number, inputs: {[key: string]: string}, tNode: TNode): InitialInputData {
   const initialInputData: InitialInputData = tNode.initialInputs || (tNode.initialInputs = []);
   initialInputData[directiveIndex] = null;
 
@@ -2007,14 +2026,13 @@ function generateInitialInputs(
       i += 4;
       continue;
     }
-    const privateName = directiveDef.inputs[attrName];
-    const declaredName = directiveDef.declaredInputs[attrName];
+    const minifiedInputName = inputs[attrName];
     const attrValue = attrs[i + 1];
 
-    if (privateName !== undefined) {
+    if (minifiedInputName !== undefined) {
       const inputsToStore: InitialInputs =
           initialInputData[directiveIndex] || (initialInputData[directiveIndex] = []);
-      inputsToStore.push(privateName, declaredName, attrValue as string);
+      inputsToStore.push(attrName, minifiedInputName, attrValue as string);
     }
 
     i += 2;
@@ -2076,7 +2094,7 @@ export function template(
   // TODO: consider a separate node type for templates
   const tNode = containerInternal(index, tagName || null, attrs || null);
 
-  if (getFirstTemplatePass()) {
+  if (tView.firstTemplatePass) {
     tNode.tViews = createTView(
         -1, templateFn, consts, vars, tView.directiveRegistry, tView.pipeRegistry, null);
   }
@@ -2104,7 +2122,10 @@ export function template(
  */
 export function container(index: number): void {
   const tNode = containerInternal(index, null, null);
-  getFirstTemplatePass() && (tNode.tViews = []);
+  const lView = getLView();
+  if (lView[TVIEW].firstTemplatePass) {
+    tNode.tViews = [];
+  }
   setIsParent(false);
 }
 
@@ -2271,7 +2292,9 @@ export function embeddedViewStart(viewBlockId: number, consts: number, vars: num
       viewToRender[QUERIES] = lContainer[QUERIES] !.createView();
     }
 
-    createViewNode(viewBlockId, viewToRender);
+    const tParentNode = getIsParent() ? previousOrParentTNode :
+                                        previousOrParentTNode && previousOrParentTNode.parent;
+    assignTViewNodeToLView(viewToRender[TVIEW], tParentNode, viewBlockId, viewToRender);
     enterView(viewToRender, viewToRender[TVIEW].node);
   }
   if (lContainer) {
@@ -2471,36 +2494,44 @@ export function projection(nodeIndex: number, selectorIndex: number = 0, attrs?:
   let projectedView = componentView[PARENT] !;
   let projectionNodeIndex = -1;
 
-  while (nodeToProject) {
-    if (nodeToProject.type === TNodeType.Projection) {
-      // This node is re-projected, so we must go up the tree to get its projected nodes.
-      const currentComponentView = findComponentView(projectedView);
-      const currentComponentHost = currentComponentView[HOST_NODE] as TElementNode;
-      const firstProjectedNode =
-          (currentComponentHost.projection as(TNode | null)[])[nodeToProject.projection as number];
+  if (Array.isArray(nodeToProject)) {
+    appendChild(nodeToProject, tProjectionNode, lView);
+  } else {
+    while (nodeToProject) {
+      if (nodeToProject.type === TNodeType.Projection) {
+        // This node is re-projected, so we must go up the tree to get its projected nodes.
+        const currentComponentView = findComponentView(projectedView);
+        const currentComponentHost = currentComponentView[HOST_NODE] as TElementNode;
+        const firstProjectedNode = (currentComponentHost.projection as(
+            TNode | null)[])[nodeToProject.projection as number];
 
-      if (firstProjectedNode) {
-        projectionNodeStack[++projectionNodeIndex] = nodeToProject;
-        projectionNodeStack[++projectionNodeIndex] = projectedView;
+        if (firstProjectedNode) {
+          if (Array.isArray(firstProjectedNode)) {
+            appendChild(firstProjectedNode, tProjectionNode, lView);
+          } else {
+            projectionNodeStack[++projectionNodeIndex] = nodeToProject;
+            projectionNodeStack[++projectionNodeIndex] = projectedView;
 
-        nodeToProject = firstProjectedNode;
-        projectedView = currentComponentView[PARENT] !;
-        continue;
+            nodeToProject = firstProjectedNode;
+            projectedView = currentComponentView[PARENT] !;
+            continue;
+          }
+        }
+      } else {
+        // This flag must be set now or we won't know that this node is projected
+        // if the nodes are inserted into a container later.
+        nodeToProject.flags |= TNodeFlags.isProjected;
+        appendProjectedNode(nodeToProject, tProjectionNode, lView, projectedView);
       }
-    } else {
-      // This flag must be set now or we won't know that this node is projected
-      // if the nodes are inserted into a container later.
-      nodeToProject.flags |= TNodeFlags.isProjected;
-      appendProjectedNode(nodeToProject, tProjectionNode, lView, projectedView);
-    }
 
-    // If we are finished with a list of re-projected nodes, we need to get
-    // back to the root projection node that was re-projected.
-    if (nodeToProject.next === null && projectedView !== componentView[PARENT] !) {
-      projectedView = projectionNodeStack[projectionNodeIndex--] as LView;
-      nodeToProject = projectionNodeStack[projectionNodeIndex--] as TNode;
+      // If we are finished with a list of re-projected nodes, we need to get
+      // back to the root projection node that was re-projected.
+      if (nodeToProject.next === null && projectedView !== componentView[PARENT] !) {
+        projectedView = projectionNodeStack[projectionNodeIndex--] as LView;
+        nodeToProject = projectionNodeStack[projectionNodeIndex--] as TNode;
+      }
+      nodeToProject = nodeToProject.next;
     }
-    nodeToProject = nodeToProject.next;
   }
 }
 
@@ -2518,10 +2549,9 @@ export function projection(nodeIndex: number, selectorIndex: number = 0, attrs?:
 export function addToViewTree<T extends LView|LContainer>(
     lView: LView, adjustedHostIndex: number, state: T): T {
   const tView = lView[TVIEW];
-  const firstTemplatePass = getFirstTemplatePass();
   if (lView[TAIL]) {
     lView[TAIL] ![NEXT] = state;
-  } else if (firstTemplatePass) {
+  } else if (tView.firstTemplatePass) {
     tView.childIndex = adjustedHostIndex;
   }
   lView[TAIL] = state;
@@ -2713,28 +2743,24 @@ export function checkView<T>(hostView: LView, component: T) {
   const hostTView = hostView[TVIEW];
   const oldView = enterView(hostView, hostView[HOST_NODE]);
   const templateFn = hostTView.template !;
-  const viewQuery = hostTView.viewQuery;
+  const creationMode = isCreationMode(hostView);
 
   try {
     namespaceHTML();
-    createViewQuery(viewQuery, hostView, component);
+    creationMode && executeViewQueryFn(hostView, hostTView, component);
     templateFn(getRenderFlags(hostView), component);
     refreshDescendantViews(hostView);
-    updateViewQuery(viewQuery, hostView, component);
+    !creationMode && executeViewQueryFn(hostView, hostTView, component);
   } finally {
     leaveView(oldView);
   }
 }
 
-function createViewQuery<T>(viewQuery: ComponentQuery<{}>| null, view: LView, component: T): void {
-  if (viewQuery && isCreationMode(view)) {
-    viewQuery(RenderFlags.Create, component);
-  }
-}
-
-function updateViewQuery<T>(viewQuery: ComponentQuery<{}>| null, view: LView, component: T): void {
-  if (viewQuery && !isCreationMode(view)) {
-    viewQuery(RenderFlags.Update, component);
+function executeViewQueryFn<T>(lView: LView, tView: TView, component: T): void {
+  const viewQuery = tView.viewQuery;
+  if (viewQuery) {
+    setCurrentQueryIndex(tView.viewQueryStartIndex);
+    viewQuery(getRenderFlags(lView), component);
   }
 }
 
@@ -2774,7 +2800,9 @@ export function markDirty<T>(component: T) {
  */
 export function bind<T>(value: T): T|NO_CHANGE {
   const lView = getLView();
-  return bindingUpdated(lView, lView[BINDING_INDEX]++, value) ? value : NO_CHANGE;
+  const bindingIndex = lView[BINDING_INDEX]++;
+  storeBindingMetadata(lView);
+  return bindingUpdated(lView, bindingIndex, value) ? value : NO_CHANGE;
 }
 
 /**
@@ -2783,9 +2811,9 @@ export function bind<T>(value: T): T|NO_CHANGE {
  * @param count Amount of vars to be allocated
  */
 export function allocHostVars(count: number): void {
-  if (!getFirstTemplatePass()) return;
   const lView = getLView();
   const tView = lView[TVIEW];
+  if (!tView.firstTemplatePass) return;
   queueHostBindingForCheck(tView, getCurrentDirectiveDef() !, count);
   prefillHostVars(tView, lView, count);
 }
@@ -2807,13 +2835,23 @@ export function interpolationV(values: any[]): string|NO_CHANGE {
   ngDevMode && assertEqual(values.length % 2, 1, 'should have an odd number of values');
   let different = false;
   const lView = getLView();
-
+  const tData = lView[TVIEW].data;
   let bindingIndex = lView[BINDING_INDEX];
+
+  if (tData[bindingIndex] == null) {
+    // 2 is the index of the first static interstitial value (ie. not prefix)
+    for (let i = 2; i < values.length; i += 2) {
+      tData[bindingIndex++] = values[i];
+    }
+    bindingIndex = lView[BINDING_INDEX];
+  }
+
   for (let i = 1; i < values.length; i += 2) {
     // Check if bindings (odd indexes) have changed
     bindingUpdated(lView, bindingIndex++, values[i]) && (different = true);
   }
   lView[BINDING_INDEX] = bindingIndex;
+  storeBindingMetadata(lView, values[0], values[values.length - 1]);
 
   if (!different) {
     return NO_CHANGE;
@@ -2837,8 +2875,8 @@ export function interpolationV(values: any[]): string|NO_CHANGE {
  */
 export function interpolation1(prefix: string, v0: any, suffix: string): string|NO_CHANGE {
   const lView = getLView();
-  const different = bindingUpdated(lView, lView[BINDING_INDEX], v0);
-  lView[BINDING_INDEX] += 1;
+  const different = bindingUpdated(lView, lView[BINDING_INDEX]++, v0);
+  storeBindingMetadata(lView, prefix, suffix);
   return different ? prefix + renderStringify(v0) + suffix : NO_CHANGE;
 }
 
@@ -2846,8 +2884,15 @@ export function interpolation1(prefix: string, v0: any, suffix: string): string|
 export function interpolation2(
     prefix: string, v0: any, i0: string, v1: any, suffix: string): string|NO_CHANGE {
   const lView = getLView();
-  const different = bindingUpdated2(lView, lView[BINDING_INDEX], v0, v1);
+  const bindingIndex = lView[BINDING_INDEX];
+  const different = bindingUpdated2(lView, bindingIndex, v0, v1);
   lView[BINDING_INDEX] += 2;
+
+  // Only set static strings the first time (data will be null subsequent runs).
+  const data = storeBindingMetadata(lView, prefix, suffix);
+  if (data) {
+    lView[TVIEW].data[bindingIndex] = i0;
+  }
 
   return different ? prefix + renderStringify(v0) + i0 + renderStringify(v1) + suffix : NO_CHANGE;
 }
@@ -2857,8 +2902,17 @@ export function interpolation3(
     prefix: string, v0: any, i0: string, v1: any, i1: string, v2: any, suffix: string): string|
     NO_CHANGE {
   const lView = getLView();
-  const different = bindingUpdated3(lView, lView[BINDING_INDEX], v0, v1, v2);
+  const bindingIndex = lView[BINDING_INDEX];
+  const different = bindingUpdated3(lView, bindingIndex, v0, v1, v2);
   lView[BINDING_INDEX] += 3;
+
+  // Only set static strings the first time (data will be null subsequent runs).
+  const data = storeBindingMetadata(lView, prefix, suffix);
+  if (data) {
+    const tData = lView[TVIEW].data;
+    tData[bindingIndex] = i0;
+    tData[bindingIndex + 1] = i1;
+  }
 
   return different ?
       prefix + renderStringify(v0) + i0 + renderStringify(v1) + i1 + renderStringify(v2) + suffix :
@@ -2870,8 +2924,18 @@ export function interpolation4(
     prefix: string, v0: any, i0: string, v1: any, i1: string, v2: any, i2: string, v3: any,
     suffix: string): string|NO_CHANGE {
   const lView = getLView();
-  const different = bindingUpdated4(lView, lView[BINDING_INDEX], v0, v1, v2, v3);
+  const bindingIndex = lView[BINDING_INDEX];
+  const different = bindingUpdated4(lView, bindingIndex, v0, v1, v2, v3);
   lView[BINDING_INDEX] += 4;
+
+  // Only set static strings the first time (data will be null subsequent runs).
+  const data = storeBindingMetadata(lView, prefix, suffix);
+  if (data) {
+    const tData = lView[TVIEW].data;
+    tData[bindingIndex] = i0;
+    tData[bindingIndex + 1] = i1;
+    tData[bindingIndex + 2] = i2;
+  }
 
   return different ?
       prefix + renderStringify(v0) + i0 + renderStringify(v1) + i1 + renderStringify(v2) + i2 +
@@ -2889,6 +2953,16 @@ export function interpolation5(
   different = bindingUpdated(lView, bindingIndex + 4, v4) || different;
   lView[BINDING_INDEX] += 5;
 
+  // Only set static strings the first time (data will be null subsequent runs).
+  const data = storeBindingMetadata(lView, prefix, suffix);
+  if (data) {
+    const tData = lView[TVIEW].data;
+    tData[bindingIndex] = i0;
+    tData[bindingIndex + 1] = i1;
+    tData[bindingIndex + 2] = i2;
+    tData[bindingIndex + 3] = i3;
+  }
+
   return different ?
       prefix + renderStringify(v0) + i0 + renderStringify(v1) + i1 + renderStringify(v2) + i2 +
           renderStringify(v3) + i3 + renderStringify(v4) + suffix :
@@ -2904,6 +2978,17 @@ export function interpolation6(
   let different = bindingUpdated4(lView, bindingIndex, v0, v1, v2, v3);
   different = bindingUpdated2(lView, bindingIndex + 4, v4, v5) || different;
   lView[BINDING_INDEX] += 6;
+
+  // Only set static strings the first time (data will be null subsequent runs).
+  const data = storeBindingMetadata(lView, prefix, suffix);
+  if (data) {
+    const tData = lView[TVIEW].data;
+    tData[bindingIndex] = i0;
+    tData[bindingIndex + 1] = i1;
+    tData[bindingIndex + 2] = i2;
+    tData[bindingIndex + 3] = i3;
+    tData[bindingIndex + 4] = i4;
+  }
 
   return different ?
       prefix + renderStringify(v0) + i0 + renderStringify(v1) + i1 + renderStringify(v2) + i2 +
@@ -2921,6 +3006,18 @@ export function interpolation7(
   let different = bindingUpdated4(lView, bindingIndex, v0, v1, v2, v3);
   different = bindingUpdated3(lView, bindingIndex + 4, v4, v5, v6) || different;
   lView[BINDING_INDEX] += 7;
+
+  // Only set static strings the first time (data will be null subsequent runs).
+  const data = storeBindingMetadata(lView, prefix, suffix);
+  if (data) {
+    const tData = lView[TVIEW].data;
+    tData[bindingIndex] = i0;
+    tData[bindingIndex + 1] = i1;
+    tData[bindingIndex + 2] = i2;
+    tData[bindingIndex + 3] = i3;
+    tData[bindingIndex + 4] = i4;
+    tData[bindingIndex + 5] = i5;
+  }
 
   return different ?
       prefix + renderStringify(v0) + i0 + renderStringify(v1) + i1 + renderStringify(v2) + i2 +
@@ -2940,11 +3037,48 @@ export function interpolation8(
   different = bindingUpdated4(lView, bindingIndex + 4, v4, v5, v6, v7) || different;
   lView[BINDING_INDEX] += 8;
 
+  // Only set static strings the first time (data will be null subsequent runs).
+  const data = storeBindingMetadata(lView, prefix, suffix);
+  if (data) {
+    const tData = lView[TVIEW].data;
+    tData[bindingIndex] = i0;
+    tData[bindingIndex + 1] = i1;
+    tData[bindingIndex + 2] = i2;
+    tData[bindingIndex + 3] = i3;
+    tData[bindingIndex + 4] = i4;
+    tData[bindingIndex + 5] = i5;
+    tData[bindingIndex + 6] = i6;
+  }
+
   return different ?
       prefix + renderStringify(v0) + i0 + renderStringify(v1) + i1 + renderStringify(v2) + i2 +
           renderStringify(v3) + i3 + renderStringify(v4) + i4 + renderStringify(v5) + i5 +
           renderStringify(v6) + i6 + renderStringify(v7) + suffix :
       NO_CHANGE;
+}
+
+/**
+ * Creates binding metadata for a particular binding and stores it in
+ * TView.data. These are generated in order to support DebugElement.properties.
+ *
+ * Each binding / interpolation will have one (including attribute bindings)
+ * because at the time of binding, we don't know to which instruction the binding
+ * belongs. It is always stored in TView.data at the index of the last binding
+ * value in LView (e.g. for interpolation8, it would be stored at the index of
+ * the 8th value).
+ *
+ * @param lView The LView that contains the current binding index.
+ * @param prefix The static prefix string
+ * @param suffix The static suffix string
+ *
+ * @returns Newly created binding metadata string for this binding or null
+ */
+function storeBindingMetadata(lView: LView, prefix = '', suffix = ''): string|null {
+  const tData = lView[TVIEW].data;
+  const lastBindingIndex = lView[BINDING_INDEX] - 1;
+  const value = INTERPOLATION_DELIMITER + prefix + INTERPOLATION_DELIMITER + suffix;
+
+  return tData[lastBindingIndex] == null ? (tData[lastBindingIndex] = value) : null;
 }
 
 /** Store a value in the `data` at a given `index`. */
@@ -2956,6 +3090,7 @@ export function store<T>(index: number, value: T): void {
   const adjustedIndex = index + HEADER_OFFSET;
   if (adjustedIndex >= tView.data.length) {
     tView.data[adjustedIndex] = null;
+    tView.blueprint[adjustedIndex] = null;
   }
   lView[adjustedIndex] = value;
 }
@@ -2971,16 +3106,6 @@ export function store<T>(index: number, value: T): void {
 export function reference<T>(index: number) {
   const contextLView = getContextLView();
   return loadInternal<T>(contextLView, index);
-}
-
-export function loadQueryList<T>(queryListIdx: number): QueryList<T> {
-  const lView = getLView();
-  ngDevMode &&
-      assertDefined(
-          lView[CONTENT_QUERIES], 'Content QueryList array should be defined if reading a query.');
-  ngDevMode && assertDataInRange(lView[CONTENT_QUERIES] !, queryListIdx);
-
-  return lView[CONTENT_QUERIES] ![queryListIdx];
 }
 
 /** Retrieves a value from current `viewData`. */
@@ -3030,26 +3155,6 @@ export function directiveInject<T>(
  */
 export function injectAttribute(attrNameToInject: string): string|null {
   return injectAttributeImpl(getPreviousOrParentTNode(), attrNameToInject);
-}
-
-/**
- * Registers a QueryList, associated with a content query, for later refresh (part of a view
- * refresh).
- */
-export function registerContentQuery<Q>(
-    queryList: QueryList<Q>, currentDirectiveIndex: number): void {
-  const viewData = getLView();
-  const tView = viewData[TVIEW];
-  const savedContentQueriesLength =
-      (viewData[CONTENT_QUERIES] || (viewData[CONTENT_QUERIES] = [])).push(queryList);
-  if (getFirstTemplatePass()) {
-    const tViewContentQueries = tView.contentQueries || (tView.contentQueries = []);
-    const lastSavedDirectiveIndex =
-        tView.contentQueries.length ? tView.contentQueries[tView.contentQueries.length - 2] : -1;
-    if (currentDirectiveIndex !== lastSavedDirectiveIndex) {
-      tViewContentQueries.push(currentDirectiveIndex, savedContentQueriesLength - 1);
-    }
-  }
 }
 
 export const CLEAN_PROMISE = _CLEAN_PROMISE;

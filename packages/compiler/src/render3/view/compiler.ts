@@ -16,7 +16,7 @@ import {AST, ParsedEvent, ParsedEventType, ParsedProperty} from '../../expressio
 import {LifecycleHooks} from '../../lifecycle_reflector';
 import {DEFAULT_INTERPOLATION_CONFIG} from '../../ml_parser/interpolation_config';
 import * as o from '../../output/output_ast';
-import {typeSourceSpan} from '../../parse_util';
+import {ParseError, ParseSourceSpan, typeSourceSpan} from '../../parse_util';
 import {CssSelector, SelectorMatcher} from '../../selector';
 import {ShadowCss} from '../../shadow_css';
 import {CONTENT_ATTR, HOST_ATTR} from '../../style_compiler';
@@ -30,7 +30,7 @@ import {prepareSyntheticListenerFunctionName, prepareSyntheticPropertyName, type
 
 import {R3ComponentDef, R3ComponentMetadata, R3DirectiveDef, R3DirectiveMetadata, R3QueryMetadata} from './api';
 import {Instruction, StylingBuilder} from './styling_builder';
-import {BindingScope, TemplateDefinitionBuilder, ValueConverter, prepareEventListenerParameters, renderFlagCheckIfStmt, resolveSanitizationFn} from './template';
+import {BindingScope, TemplateDefinitionBuilder, ValueConverter, makeBindingParser, prepareEventListenerParameters, renderFlagCheckIfStmt, resolveSanitizationFn} from './template';
 import {CONTEXT_NAME, DefinitionMap, RENDER_FLAGS, TEMPORARY_NAME, asLiteral, conditionallyCreateMapObjectLiteral, getQueryPredicate, temporaryAllocator} from './util';
 
 const EMPTY_ARRAY: any[] = [];
@@ -125,6 +125,7 @@ function baseDirectiveFields(
  */
 function addFeatures(
     definitionMap: DefinitionMap, meta: R3DirectiveMetadata | R3ComponentMetadata) {
+  // e.g. `features: [NgOnChangesFeature()]`
   const features: o.Expression[] = [];
 
   const providers = meta.providers;
@@ -140,7 +141,9 @@ function addFeatures(
   if (meta.usesInheritance) {
     features.push(o.importExpr(R3.InheritDefinitionFeature));
   }
-
+  if (meta.lifecycle.usesOnChanges) {
+    features.push(o.importExpr(R3.NgOnChangesFeature).callFn(EMPTY_ARRAY));
+  }
   if (features.length) {
     definitionMap.set('features', o.literalArr(features));
   }
@@ -251,7 +254,7 @@ export function compileComponentFromMetadata(
   const template = meta.template;
   const templateBuilder = new TemplateDefinitionBuilder(
       constantPool, BindingScope.ROOT_SCOPE, 0, templateTypeName, null, null, templateName,
-      meta.viewQueries, directiveMatcher, directivesUsed, meta.pipes, pipesUsed, R3.namespaceHTML,
+      directiveMatcher, directivesUsed, meta.pipes, pipesUsed, R3.namespaceHTML,
       meta.relativeContextFilePath, meta.i18nUseExternalIds);
 
   const templateFunctionExpression = templateBuilder.buildTemplateFunction(template.nodes, []);
@@ -421,6 +424,10 @@ function directiveMetadataFromGlobalMetadata(
     selector: directive.selector,
     deps: dependenciesFromGlobalMetadata(directive.type, outputCtx, reflector),
     queries: queriesFromGlobalMetadata(directive.queries, outputCtx),
+    lifecycle: {
+      usesOnChanges:
+          directive.type.lifecycleHooks.some(lifecycle => lifecycle == LifecycleHooks.OnChanges),
+    },
     host: {
       attributes: directive.hostAttributes,
       listeners: summary.hostListeners,
@@ -478,22 +485,15 @@ function selectorsFromGlobalMetadata(
   return o.NULL_EXPR;
 }
 
-function createQueryDefinition(
-    query: R3QueryMetadata, constantPool: ConstantPool, idx: number | null): o.Expression {
-  const predicate = getQueryPredicate(query, constantPool);
-
-  // e.g. r3.query(null, somePredicate, false) or r3.query(0, ['div'], false)
+function prepareQueryParams(query: R3QueryMetadata, constantPool: ConstantPool): o.Expression[] {
   const parameters = [
-    o.literal(idx, o.INFERRED_TYPE),
-    predicate,
+    getQueryPredicate(query, constantPool),
     o.literal(query.descendants),
   ];
-
   if (query.read) {
     parameters.push(query.read);
   }
-
-  return o.importExpr(R3.query).callFn(parameters);
+  return parameters;
 }
 
 // Turn a directive selector into an R3-compatible selector for directive def
@@ -515,10 +515,8 @@ function createContentQueriesFunction(
     meta: R3DirectiveMetadata, constantPool: ConstantPool): o.Expression|null {
   if (meta.queries.length) {
     const statements: o.Statement[] = meta.queries.map((query: R3QueryMetadata) => {
-      const queryDefinition = createQueryDefinition(query, constantPool, null);
-      return o.importExpr(R3.registerContentQuery)
-          .callFn([queryDefinition, o.variable('dirIndex')])
-          .toStmt();
+      const args = [o.variable('dirIndex'), ...prepareQueryParams(query, constantPool) as any];
+      return o.importExpr(R3.contentQuery).callFn(args).toStmt();
     });
     const typeName = meta.name;
     const parameters = [new o.FnParam('dirIndex', o.NUMBER_TYPE)];
@@ -535,10 +533,7 @@ function createContentQueriesRefreshFunction(meta: R3DirectiveMetadata): o.Expre
   if (meta.queries.length > 0) {
     const statements: o.Statement[] = [];
     const typeName = meta.name;
-    const parameters = [
-      new o.FnParam('dirIndex', o.NUMBER_TYPE),
-      new o.FnParam('queryStartIndex', o.NUMBER_TYPE),
-    ];
+    const parameters = [new o.FnParam('dirIndex', o.NUMBER_TYPE)];
     const directiveInstanceVar = o.variable('instance');
     // var $tmp$: any;
     const temporary = temporaryAllocator(statements, TEMPORARY_NAME);
@@ -547,11 +542,8 @@ function createContentQueriesRefreshFunction(meta: R3DirectiveMetadata): o.Expre
     statements.push(directiveInstanceVar.set(o.importExpr(R3.load).callFn([o.variable('dirIndex')]))
                         .toDeclStmt(o.INFERRED_TYPE, [o.StmtModifier.Final]));
 
-    meta.queries.forEach((query: R3QueryMetadata, idx: number) => {
-      const loadQLArg = o.variable('queryStartIndex');
-      const getQueryList = o.importExpr(R3.loadQueryList).callFn([
-        idx > 0 ? loadQLArg.plus(o.literal(idx)) : loadQLArg
-      ]);
+    meta.queries.forEach((query: R3QueryMetadata) => {
+      const getQueryList = o.importExpr(R3.loadContentQuery).callFn([]);
       const assignToTemporary = temporary().set(getQueryList);
       const callQueryRefresh = o.importExpr(R3.queryRefresh).callFn([assignToTemporary]);
 
@@ -613,22 +605,21 @@ function createViewQueriesFunction(
   const updateStatements: o.Statement[] = [];
   const tempAllocator = temporaryAllocator(updateStatements, TEMPORARY_NAME);
 
-  for (let i = 0; i < meta.viewQueries.length; i++) {
-    const query = meta.viewQueries[i];
-
-    // creation, e.g. r3.Q(0, somePredicate, true);
-    const queryDefinition = createQueryDefinition(query, constantPool, i);
+  meta.viewQueries.forEach((query: R3QueryMetadata) => {
+    // creation, e.g. r3.viewQuery(somePredicate, true);
+    const queryDefinition =
+        o.importExpr(R3.viewQuery).callFn(prepareQueryParams(query, constantPool));
     createStatements.push(queryDefinition.toStmt());
 
-    // update, e.g. (r3.qR(tmp = r3.ɵload(0)) && (ctx.someDir = tmp));
+    // update, e.g. (r3.queryRefresh(tmp = r3.loadViewQuery()) && (ctx.someDir = tmp));
     const temporary = tempAllocator();
-    const getQueryList = o.importExpr(R3.load).callFn([o.literal(i)]);
+    const getQueryList = o.importExpr(R3.loadViewQuery).callFn([]);
     const refresh = o.importExpr(R3.queryRefresh).callFn([temporary.set(getQueryList)]);
     const updateDirective = o.variable(CONTEXT_NAME)
                                 .prop(query.propertyName)
                                 .set(query.first ? temporary.prop('first') : temporary);
     updateStatements.push(refresh.and(updateDirective).toStmt());
-  }
+  });
 
   const viewQueryFnName = meta.name ? `${meta.name}_Query` : null;
   return o.fn(
@@ -652,6 +643,23 @@ function createHostBindingsFunction(
   const hostBindingSourceSpan = meta.typeSourceSpan;
   const directiveSummary = metadataAsSummary(meta);
 
+  let valueConverter: ValueConverter;
+  const getValueConverter = () => {
+    if (!valueConverter) {
+      const hostVarsCountFn = (numSlots: number): number => {
+        const originalVarsCount = totalHostVarsCount;
+        totalHostVarsCount += numSlots;
+        return originalVarsCount;
+      };
+      valueConverter = new ValueConverter(
+          constantPool,
+          () => error('Unexpected node'),  // new nodes are illegal here
+          hostVarsCountFn,
+          () => error('Unexpected pipe'));  // pipes are illegal here
+    }
+    return valueConverter;
+  };
+
   // Calculate host event bindings
   const eventBindings =
       bindingParser.createDirectiveHostEventAsts(directiveSummary, hostBindingSourceSpan);
@@ -662,111 +670,93 @@ function createHostBindingsFunction(
 
   // Calculate the host property bindings
   const bindings = bindingParser.createBoundHostProperties(directiveSummary, hostBindingSourceSpan);
+  (bindings || []).forEach((binding: ParsedProperty) => {
+    const name = binding.name;
+    const stylePrefix = getStylingPrefix(name);
+    if (stylePrefix === 'style') {
+      const {propertyName, unit} = parseNamedProperty(name);
+      styleBuilder.registerStyleInput(propertyName, binding.expression, unit, binding.sourceSpan);
+    } else if (stylePrefix === 'class') {
+      styleBuilder.registerClassInput(
+          parseNamedProperty(name).propertyName, binding.expression, binding.sourceSpan);
+    } else {
+      // resolve literal arrays and literal objects
+      const value = binding.expression.visit(getValueConverter());
+      const bindingExpr = bindingFn(bindingContext, value);
 
-  const bindingFn = (implicit: any, value: AST) => {
-    return convertPropertyBinding(
-        null, implicit, value, 'b', BindingForm.TrySimple, () => error('Unexpected interpolation'));
-  };
-  if (bindings) {
-    const hostVarsCountFn = (numSlots: number): number => {
-      const originalVarsCount = totalHostVarsCount;
-      totalHostVarsCount += numSlots;
-      return originalVarsCount;
-    };
-    const valueConverter = new ValueConverter(
-        constantPool,
-        /* new nodes are illegal here */ () => error('Unexpected node'), hostVarsCountFn,
-        /* pipes are illegal here */ () => error('Unexpected pipe'));
+      const {bindingName, instruction, isAttribute} = getBindingNameAndInstruction(binding);
 
-    for (const binding of bindings) {
-      const name = binding.name;
-      const stylePrefix = getStylingPrefix(name);
-      if (stylePrefix === 'style') {
-        const {propertyName, unit} = parseNamedProperty(name);
-        styleBuilder.registerStyleInput(propertyName, binding.expression, unit, binding.sourceSpan);
-      } else if (stylePrefix === 'class') {
-        styleBuilder.registerClassInput(
-            parseNamedProperty(name).propertyName, binding.expression, binding.sourceSpan);
-      } else {
-        // resolve literal arrays and literal objects
-        const value = binding.expression.visit(valueConverter);
-        const bindingExpr = bindingFn(bindingContext, value);
+      const securityContexts =
+          bindingParser.calcPossibleSecurityContexts(meta.selector || '', bindingName, isAttribute)
+              .filter(context => context !== core.SecurityContext.NONE);
 
-        const {bindingName, instruction, isAttribute} = getBindingNameAndInstruction(binding);
-
-        const securityContexts =
-            bindingParser
-                .calcPossibleSecurityContexts(meta.selector || '', bindingName, isAttribute)
-                .filter(context => context !== core.SecurityContext.NONE);
-
-        let sanitizerFn: o.ExternalExpr|null = null;
-        if (securityContexts.length) {
-          if (securityContexts.length === 2 &&
-              securityContexts.indexOf(core.SecurityContext.URL) > -1 &&
-              securityContexts.indexOf(core.SecurityContext.RESOURCE_URL) > -1) {
-            // Special case for some URL attributes (such as "src" and "href") that may be a part of
-            // different security contexts. In this case we use special santitization function and
-            // select the actual sanitizer at runtime based on a tag name that is provided while
-            // invoking sanitization function.
-            sanitizerFn = o.importExpr(R3.sanitizeUrlOrResourceUrl);
-          } else {
-            sanitizerFn = resolveSanitizationFn(securityContexts[0], isAttribute);
-          }
+      let sanitizerFn: o.ExternalExpr|null = null;
+      if (securityContexts.length) {
+        if (securityContexts.length === 2 &&
+            securityContexts.indexOf(core.SecurityContext.URL) > -1 &&
+            securityContexts.indexOf(core.SecurityContext.RESOURCE_URL) > -1) {
+          // Special case for some URL attributes (such as "src" and "href") that may be a part
+          // of different security contexts. In this case we use special santitization function and
+          // select the actual sanitizer at runtime based on a tag name that is provided while
+          // invoking sanitization function.
+          sanitizerFn = o.importExpr(R3.sanitizeUrlOrResourceUrl);
+        } else {
+          sanitizerFn = resolveSanitizationFn(securityContexts[0], isAttribute);
         }
-
-        const instructionParams: o.Expression[] = [
-          elVarExp, o.literal(bindingName), o.importExpr(R3.bind).callFn([bindingExpr.currValExpr])
-        ];
-        if (sanitizerFn) {
-          instructionParams.push(sanitizerFn);
-        }
-        if (!isAttribute) {
-          if (!sanitizerFn) {
-            // append `null` in front of `nativeOnly` flag if no sanitizer fn defined
-            instructionParams.push(o.literal(null));
-          }
-          // host bindings must have nativeOnly prop set to true
-          instructionParams.push(o.literal(true));
-        }
-
-        updateStatements.push(...bindingExpr.stmts);
-        updateStatements.push(o.importExpr(instruction).callFn(instructionParams).toStmt());
-      }
-    }
-
-    // since we're dealing with directives/components and both have hostBinding
-    // functions, we need to generate a special hostAttrs instruction that deals
-    // with both the assignment of styling as well as static attributes to the host
-    // element. The instruction below will instruct all initial styling (styling
-    // that is inside of a host binding within a directive/component) to be attached
-    // to the host element alongside any of the provided host attributes that were
-    // collected earlier.
-    const hostAttrs = convertAttributesToExpressions(staticAttributesAndValues);
-    const hostInstruction = styleBuilder.buildHostAttrsInstruction(null, hostAttrs, constantPool);
-    if (hostInstruction) {
-      createStatements.push(createStylingStmt(hostInstruction, bindingContext, bindingFn));
-    }
-
-    if (styleBuilder.hasBindings) {
-      // singular style/class bindings (things like `[style.prop]` and `[class.name]`)
-      // MUST be registered on a given element within the component/directive
-      // templateFn/hostBindingsFn functions. The instruction below will figure out
-      // what all the bindings are and then generate the statements required to register
-      // those bindings to the element via `elementStyling`.
-      const elementStylingInstruction =
-          styleBuilder.buildElementStylingInstruction(null, constantPool);
-      if (elementStylingInstruction) {
-        createStatements.push(
-            createStylingStmt(elementStylingInstruction, bindingContext, bindingFn));
       }
 
-      // finally each binding that was registered in the statement above will need to be added to
-      // the update block of a component/directive templateFn/hostBindingsFn so that the bindings
-      // are evaluated and updated for the element.
-      styleBuilder.buildUpdateLevelInstructions(valueConverter).forEach(instruction => {
-        updateStatements.push(createStylingStmt(instruction, bindingContext, bindingFn));
-      });
+      const instructionParams: o.Expression[] = [
+        elVarExp, o.literal(bindingName), o.importExpr(R3.bind).callFn([bindingExpr.currValExpr])
+      ];
+      if (sanitizerFn) {
+        instructionParams.push(sanitizerFn);
+      }
+      if (!isAttribute) {
+        if (!sanitizerFn) {
+          // append `null` in front of `nativeOnly` flag if no sanitizer fn defined
+          instructionParams.push(o.literal(null));
+        }
+        // host bindings must have nativeOnly prop set to true
+        instructionParams.push(o.literal(true));
+      }
+
+      updateStatements.push(...bindingExpr.stmts);
+      updateStatements.push(o.importExpr(instruction).callFn(instructionParams).toStmt());
     }
+  });
+
+  // since we're dealing with directives/components and both have hostBinding
+  // functions, we need to generate a special hostAttrs instruction that deals
+  // with both the assignment of styling as well as static attributes to the host
+  // element. The instruction below will instruct all initial styling (styling
+  // that is inside of a host binding within a directive/component) to be attached
+  // to the host element alongside any of the provided host attributes that were
+  // collected earlier.
+  const hostAttrs = convertAttributesToExpressions(staticAttributesAndValues);
+  const hostInstruction = styleBuilder.buildHostAttrsInstruction(null, hostAttrs, constantPool);
+  if (hostInstruction) {
+    createStatements.push(createStylingStmt(hostInstruction, bindingContext, bindingFn));
+  }
+
+  if (styleBuilder.hasBindings) {
+    // singular style/class bindings (things like `[style.prop]` and `[class.name]`)
+    // MUST be registered on a given element within the component/directive
+    // templateFn/hostBindingsFn functions. The instruction below will figure out
+    // what all the bindings are and then generate the statements required to register
+    // those bindings to the element via `elementStyling`.
+    const elementStylingInstruction =
+        styleBuilder.buildElementStylingInstruction(null, constantPool);
+    if (elementStylingInstruction) {
+      createStatements.push(
+          createStylingStmt(elementStylingInstruction, bindingContext, bindingFn));
+    }
+
+    // finally each binding that was registered in the statement above will need to be added to
+    // the update block of a component/directive templateFn/hostBindingsFn so that the bindings
+    // are evaluated and updated for the element.
+    styleBuilder.buildUpdateLevelInstructions(getValueConverter()).forEach(instruction => {
+      updateStatements.push(createStylingStmt(instruction, bindingContext, bindingFn));
+    });
   }
 
   if (totalHostVarsCount) {
@@ -792,6 +782,11 @@ function createHostBindingsFunction(
   }
 
   return null;
+}
+
+function bindingFn(implicit: any, value: AST) {
+  return convertPropertyBinding(
+      null, implicit, value, 'b', BindingForm.TrySimple, () => error('Unexpected interpolation'));
 }
 
 function createStylingStmt(
@@ -874,11 +869,15 @@ const enum HostBindingGroup {
   Event = 2,
 }
 
-export function parseHostBindings(host: {[key: string]: string}): {
-  attributes: {[key: string]: string},
-  listeners: {[key: string]: string},
-  properties: {[key: string]: string},
-} {
+// Defines Host Bindings structure that contains attributes, listeners, and properties,
+// parsed from the `host` object defined for a Type.
+export interface ParsedHostBindings {
+  attributes: {[key: string]: string};
+  listeners: {[key: string]: string};
+  properties: {[key: string]: string};
+}
+
+export function parseHostBindings(host: {[key: string]: string}): ParsedHostBindings {
   const attributes: {[key: string]: string} = {};
   const listeners: {[key: string]: string} = {};
   const properties: {[key: string]: string} = {};
@@ -899,6 +898,25 @@ export function parseHostBindings(host: {[key: string]: string}): {
   });
 
   return {attributes, listeners, properties};
+}
+
+/**
+ * Verifies host bindings and returns the list of errors (if any). Empty array indicates that a
+ * given set of host bindings has no errors.
+ *
+ * @param bindings set of host bindings to verify.
+ * @param sourceSpan source span where host bindings were defined.
+ * @returns array of errors associated with a given set of host bindings.
+ */
+export function verifyHostBindings(
+    bindings: ParsedHostBindings, sourceSpan: ParseSourceSpan): ParseError[] {
+  const summary = metadataAsSummary({ host: bindings } as any);
+  // TODO: abstract out host bindings verification logic and use it instead of
+  // creating events and properties ASTs to detect errors (FW-996)
+  const bindingParser = makeBindingParser();
+  bindingParser.createDirectiveHostEventAsts(summary, sourceSpan);
+  bindingParser.createBoundHostProperties(summary, sourceSpan);
+  return bindingParser.errors;
 }
 
 function compileStyles(styles: string[], selector: string, hostSelector: string): string[] {

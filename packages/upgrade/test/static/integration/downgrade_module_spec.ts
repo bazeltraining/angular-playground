@@ -11,7 +11,6 @@ import {async, fakeAsync, tick} from '@angular/core/testing';
 import {BrowserModule} from '@angular/platform-browser';
 import {platformBrowserDynamic} from '@angular/platform-browser-dynamic';
 import {browserDetection} from '@angular/platform-browser/testing/src/browser_util';
-import {fixmeIvy} from '@angular/private/testing';
 import {UpgradeComponent, downgradeComponent, downgradeModule} from '@angular/upgrade/static';
 import * as angular from '@angular/upgrade/static/src/common/angular1';
 import {$EXCEPTION_HANDLER, $ROOT_SCOPE, INJECTOR_KEY, LAZY_MODULE_REF} from '@angular/upgrade/static/src/common/constants';
@@ -330,215 +329,211 @@ withEachNg1Version(() => {
            expect(multiTrim(element.children[1].textContent)).toBe('Counter:1');
          }));
 
-      fixmeIvy('FW-873: projected component injector hierarchy not wired up correctly')
-          .it('should correctly traverse the injector tree of downgraded components', async(() => {
-                @Component({
-                  selector: 'ng2A',
-                  template: 'ng2A(<ng-content></ng-content>)',
-                  providers: [
-                    {provide: 'FOO', useValue: 'CompA-foo'},
-                    {provide: 'BAR', useValue: 'CompA-bar'},
-                  ],
-                })
-                class Ng2ComponentA {
-                }
+      it('should correctly traverse the injector tree of downgraded components', async(() => {
+           @Component({
+             selector: 'ng2A',
+             template: 'ng2A(<ng-content></ng-content>)',
+             providers: [
+               {provide: 'FOO', useValue: 'CompA-foo'},
+               {provide: 'BAR', useValue: 'CompA-bar'},
+             ],
+           })
+           class Ng2ComponentA {
+           }
 
-                @Component({
-                  selector: 'ng2B',
-                  template: `
+           @Component({
+             selector: 'ng2B',
+             template: `
                FOO:{{ foo }}
                BAR:{{ bar }}
                BAZ:{{ baz }}
                QUX:{{ qux }}
              `,
-                  providers: [
-                    {provide: 'FOO', useValue: 'CompB-foo'},
-                  ],
-                })
-                class Ng2ComponentB {
-                  constructor(
-                      @Inject('FOO') public foo: string, @Inject('BAR') public bar: string,
-                      @Inject('BAZ') public baz: string, @Inject('QUX') public qux: string) {}
-                }
+             providers: [
+               {provide: 'FOO', useValue: 'CompB-foo'},
+             ],
+           })
+           class Ng2ComponentB {
+             constructor(
+                 @Inject('FOO') public foo: string, @Inject('BAR') public bar: string,
+                 @Inject('BAZ') public baz: string, @Inject('QUX') public qux: string) {}
+           }
 
-                @NgModule({
-                  declarations: [Ng2ComponentA, Ng2ComponentB],
-                  entryComponents: [Ng2ComponentA, Ng2ComponentB],
-                  imports: [BrowserModule],
-                  providers: [
-                    {provide: 'FOO', useValue: 'Mod-foo'},
-                    {provide: 'BAR', useValue: 'Mod-bar'},
-                    {provide: 'BAZ', useValue: 'Mod-baz'},
-                  ],
-                })
-                class Ng2Module {
-                  ngDoBootstrap() {}
-                }
+           @NgModule({
+             declarations: [Ng2ComponentA, Ng2ComponentB],
+             entryComponents: [Ng2ComponentA, Ng2ComponentB],
+             imports: [BrowserModule],
+             providers: [
+               {provide: 'FOO', useValue: 'Mod-foo'},
+               {provide: 'BAR', useValue: 'Mod-bar'},
+               {provide: 'BAZ', useValue: 'Mod-baz'},
+             ],
+           })
+           class Ng2Module {
+             ngDoBootstrap() {}
+           }
 
-                const bootstrapFn = (extraProviders: StaticProvider[]) => {
-                  const platformRef = getPlatform() || platformBrowserDynamic([
-                                        ...extraProviders,
-                                        {provide: 'FOO', useValue: 'Plat-foo'},
-                                        {provide: 'BAR', useValue: 'Plat-bar'},
-                                        {provide: 'BAZ', useValue: 'Plat-baz'},
-                                        {provide: 'QUX', useValue: 'Plat-qux'},
-                                      ]);
-                  return platformRef.bootstrapModule(Ng2Module);
-                };
+           const bootstrapFn = (extraProviders: StaticProvider[]) => {
+             const platformRef = getPlatform() || platformBrowserDynamic([
+                                   ...extraProviders,
+                                   {provide: 'FOO', useValue: 'Plat-foo'},
+                                   {provide: 'BAR', useValue: 'Plat-bar'},
+                                   {provide: 'BAZ', useValue: 'Plat-baz'},
+                                   {provide: 'QUX', useValue: 'Plat-qux'},
+                                 ]);
+             return platformRef.bootstrapModule(Ng2Module);
+           };
 
-                const downMod = downgradeModule(bootstrapFn);
-                const ng1Module =
-                    angular.module('ng1', [downMod])
-                        .directive(
-                            'ng2A', downgradeComponent({component: Ng2ComponentA, propagateDigest}))
-                        .directive(
-                            'ng2B',
-                            downgradeComponent({component: Ng2ComponentB, propagateDigest}));
+           const downMod = downgradeModule(bootstrapFn);
+           const ng1Module =
+               angular.module('ng1', [downMod])
+                   .directive(
+                       'ng2A', downgradeComponent({component: Ng2ComponentA, propagateDigest}))
+                   .directive(
+                       'ng2B', downgradeComponent({component: Ng2ComponentB, propagateDigest}));
 
-                const element = html(`
+           const element = html(`
               <ng2-a><ng2-b ng-if="showB1"></ng2-b></ng2-a>
               <ng2-b ng-if="showB2"></ng2-b>
             `);
-                const $injector = angular.bootstrap(element, [ng1Module.name]);
-                const $rootScope = $injector.get($ROOT_SCOPE) as angular.IRootScopeService;
+           const $injector = angular.bootstrap(element, [ng1Module.name]);
+           const $rootScope = $injector.get($ROOT_SCOPE) as angular.IRootScopeService;
 
-                // Wait for the module to be bootstrapped.
-                setTimeout(() => {
-                  expect(multiTrim(element.textContent)).toBe('ng2A()');
+           // Wait for the module to be bootstrapped.
+           setTimeout(() => {
+             expect(multiTrim(element.textContent)).toBe('ng2A()');
 
-                  // Nested component B.
-                  $rootScope.$apply('showB1 = true');
-                  expect(multiTrim(element.children[0].textContent))
-                      .toBe('ng2A( FOO:CompB-foo BAR:CompA-bar BAZ:Mod-baz QUX:Plat-qux )');
+             // Nested component B.
+             $rootScope.$apply('showB1 = true');
+             expect(multiTrim(element.children[0].textContent))
+                 .toBe('ng2A( FOO:CompB-foo BAR:CompA-bar BAZ:Mod-baz QUX:Plat-qux )');
 
-                  // Standalone component B.
-                  $rootScope.$apply('showB2 = true');
-                  expect(multiTrim(element.children[1].textContent))
-                      .toBe('FOO:CompB-foo BAR:Mod-bar BAZ:Mod-baz QUX:Plat-qux');
-                });
-              }));
+             // Standalone component B.
+             $rootScope.$apply('showB2 = true');
+             expect(multiTrim(element.children[1].textContent))
+                 .toBe('FOO:CompB-foo BAR:Mod-bar BAZ:Mod-baz QUX:Plat-qux');
+           });
+         }));
 
-      fixmeIvy('FW-873: projected component injector hierarchy not wired up correctly')
-          .it('should correctly traverse the injector tree of downgraded components (from different modules)',
-              async(() => {
-                @Component({
-                  selector: 'ng2A',
-                  template: 'ng2A(<ng-content></ng-content>)',
-                  providers: [
-                    {provide: 'FOO', useValue: 'CompA-foo'},
-                    {provide: 'BAR', useValue: 'CompA-bar'},
-                  ],
-                })
-                class Ng2ComponentA {
-                }
+      it('should correctly traverse the injector tree of downgraded components (from different modules)',
+         async(() => {
+           @Component({
+             selector: 'ng2A',
+             template: 'ng2A(<ng-content></ng-content>)',
+             providers: [
+               {provide: 'FOO', useValue: 'CompA-foo'},
+               {provide: 'BAR', useValue: 'CompA-bar'},
+             ],
+           })
+           class Ng2ComponentA {
+           }
 
-                @Component({
-                  selector: 'ng2B',
-                  template: `
+           @Component({
+             selector: 'ng2B',
+             template: `
                FOO:{{ foo }}
                BAR:{{ bar }}
                BAZ:{{ baz }}
                QUX:{{ qux }}
                QUUX:{{ quux }}
              `,
-                  providers: [
-                    {provide: 'FOO', useValue: 'CompB-foo'},
-                  ],
-                })
-                class Ng2ComponentB {
-                  constructor(
-                      @Inject('FOO') public foo: string, @Inject('BAR') public bar: string,
-                      @Inject('BAZ') public baz: string, @Inject('QUX') public qux: string,
-                      @Inject('QUUX') public quux: string) {}
-                }
+             providers: [
+               {provide: 'FOO', useValue: 'CompB-foo'},
+             ],
+           })
+           class Ng2ComponentB {
+             constructor(
+                 @Inject('FOO') public foo: string, @Inject('BAR') public bar: string,
+                 @Inject('BAZ') public baz: string, @Inject('QUX') public qux: string,
+                 @Inject('QUUX') public quux: string) {}
+           }
 
-                @NgModule({
-                  declarations: [Ng2ComponentA],
-                  entryComponents: [Ng2ComponentA],
-                  imports: [BrowserModule],
-                  providers: [
-                    {provide: 'FOO', useValue: 'ModA-foo'},
-                    {provide: 'BAR', useValue: 'ModA-bar'},
-                    {provide: 'BAZ', useValue: 'ModA-baz'},
-                    {provide: 'QUX', useValue: 'ModA-qux'},
-                  ],
-                })
-                class Ng2ModuleA {
-                  ngDoBootstrap() {}
-                }
+           @NgModule({
+             declarations: [Ng2ComponentA],
+             entryComponents: [Ng2ComponentA],
+             imports: [BrowserModule],
+             providers: [
+               {provide: 'FOO', useValue: 'ModA-foo'},
+               {provide: 'BAR', useValue: 'ModA-bar'},
+               {provide: 'BAZ', useValue: 'ModA-baz'},
+               {provide: 'QUX', useValue: 'ModA-qux'},
+             ],
+           })
+           class Ng2ModuleA {
+             ngDoBootstrap() {}
+           }
 
-                @NgModule({
-                  declarations: [Ng2ComponentB],
-                  entryComponents: [Ng2ComponentB],
-                  imports: [BrowserModule],
-                  providers: [
-                    {provide: 'FOO', useValue: 'ModB-foo'},
-                    {provide: 'BAR', useValue: 'ModB-bar'},
-                    {provide: 'BAZ', useValue: 'ModB-baz'},
-                  ],
-                })
-                class Ng2ModuleB {
-                  ngDoBootstrap() {}
-                }
+           @NgModule({
+             declarations: [Ng2ComponentB],
+             entryComponents: [Ng2ComponentB],
+             imports: [BrowserModule],
+             providers: [
+               {provide: 'FOO', useValue: 'ModB-foo'},
+               {provide: 'BAR', useValue: 'ModB-bar'},
+               {provide: 'BAZ', useValue: 'ModB-baz'},
+             ],
+           })
+           class Ng2ModuleB {
+             ngDoBootstrap() {}
+           }
 
-                const doDowngradeModule = (module: Type<any>) => {
-                  const bootstrapFn = (extraProviders: StaticProvider[]) => {
-                    const platformRef = getPlatform() || platformBrowserDynamic([
-                                          ...extraProviders,
-                                          {provide: 'FOO', useValue: 'Plat-foo'},
-                                          {provide: 'BAR', useValue: 'Plat-bar'},
-                                          {provide: 'BAZ', useValue: 'Plat-baz'},
-                                          {provide: 'QUX', useValue: 'Plat-qux'},
-                                          {provide: 'QUUX', useValue: 'Plat-quux'},
-                                        ]);
-                    return platformRef.bootstrapModule(module);
-                  };
-                  return downgradeModule(bootstrapFn);
-                };
+           const doDowngradeModule = (module: Type<any>) => {
+             const bootstrapFn = (extraProviders: StaticProvider[]) => {
+               const platformRef = getPlatform() || platformBrowserDynamic([
+                                     ...extraProviders,
+                                     {provide: 'FOO', useValue: 'Plat-foo'},
+                                     {provide: 'BAR', useValue: 'Plat-bar'},
+                                     {provide: 'BAZ', useValue: 'Plat-baz'},
+                                     {provide: 'QUX', useValue: 'Plat-qux'},
+                                     {provide: 'QUUX', useValue: 'Plat-quux'},
+                                   ]);
+               return platformRef.bootstrapModule(module);
+             };
+             return downgradeModule(bootstrapFn);
+           };
 
-                const downModA = doDowngradeModule(Ng2ModuleA);
-                const downModB = doDowngradeModule(Ng2ModuleB);
-                const ng1Module = angular.module('ng1', [downModA, downModB])
-                                      .directive('ng2A', downgradeComponent({
-                                                   component: Ng2ComponentA,
-                                                   downgradedModule: downModA, propagateDigest,
-                                                 }))
-                                      .directive('ng2B', downgradeComponent({
-                                                   component: Ng2ComponentB,
-                                                   downgradedModule: downModB, propagateDigest,
-                                                 }));
+           const downModA = doDowngradeModule(Ng2ModuleA);
+           const downModB = doDowngradeModule(Ng2ModuleB);
+           const ng1Module = angular.module('ng1', [downModA, downModB])
+                                 .directive('ng2A', downgradeComponent({
+                                              component: Ng2ComponentA,
+                                              downgradedModule: downModA, propagateDigest,
+                                            }))
+                                 .directive('ng2B', downgradeComponent({
+                                              component: Ng2ComponentB,
+                                              downgradedModule: downModB, propagateDigest,
+                                            }));
 
-                const element = html(`
+           const element = html(`
               <ng2-a><ng2-b ng-if="showB1"></ng2-b></ng2-a>
               <ng2-b ng-if="showB2"></ng2-b>
             `);
-                const $injector = angular.bootstrap(element, [ng1Module.name]);
-                const $rootScope = $injector.get($ROOT_SCOPE) as angular.IRootScopeService;
+           const $injector = angular.bootstrap(element, [ng1Module.name]);
+           const $rootScope = $injector.get($ROOT_SCOPE) as angular.IRootScopeService;
 
-                // Wait for module A to be bootstrapped.
-                setTimeout(() => {
-                  expect(multiTrim(element.textContent)).toBe('ng2A()');
+           // Wait for module A to be bootstrapped.
+           setTimeout(() => {
+             expect(multiTrim(element.textContent)).toBe('ng2A()');
 
-                  // Nested component B.
-                  $rootScope.$apply('showB1 = true');
+             // Nested component B.
+             $rootScope.$apply('showB1 = true');
 
-                  // Wait for module B to be bootstrapped.
-                  setTimeout(() => {
-                    // It is debatable, whether the order of traversal should be:
-                    // CompB > CompA > ModB > ModA > Plat (similar to how lazy-loaded components
-                    // work)
-                    expect(multiTrim(element.children[0].textContent))
-                        .toBe(
-                            'ng2A( FOO:CompB-foo BAR:CompA-bar BAZ:ModB-baz QUX:Plat-qux QUUX:Plat-quux )');
+             // Wait for module B to be bootstrapped.
+             setTimeout(() => {
+               // It is debatable, whether the order of traversal should be:
+               // CompB > CompA > ModB > ModA > Plat (similar to how lazy-loaded components
+               // work)
+               expect(multiTrim(element.children[0].textContent))
+                   .toBe(
+                       'ng2A( FOO:CompB-foo BAR:CompA-bar BAZ:ModB-baz QUX:Plat-qux QUUX:Plat-quux )');
 
-                    // Standalone component B.
-                    $rootScope.$apply('showB2 = true');
-                    expect(multiTrim(element.children[1].textContent))
-                        .toBe(
-                            'FOO:CompB-foo BAR:ModB-bar BAZ:ModB-baz QUX:Plat-qux QUUX:Plat-quux');
-                  });
-                });
-              }));
+               // Standalone component B.
+               $rootScope.$apply('showB2 = true');
+               expect(multiTrim(element.children[1].textContent))
+                   .toBe('FOO:CompB-foo BAR:ModB-bar BAZ:ModB-baz QUX:Plat-qux QUUX:Plat-quux');
+             });
+           });
+         }));
 
       it('should support downgrading a component and propagate inputs', async(() => {
            @Component(
@@ -594,64 +589,63 @@ withEachNg1Version(() => {
            });
          }));
 
-      fixmeIvy('FW-718: upgraded service not being initialized correctly on the injector')
-          .it('should support using an upgraded service', async(() => {
-                class Ng2Service {
-                  constructor(@Inject('ng1Value') private ng1Value: string) {}
-                  getValue = () => `${this.ng1Value}-bar`;
-                }
+      it('should support using an upgraded service', async(() => {
+           @Injectable()
+           class Ng2Service {
+             constructor(@Inject('ng1Value') private ng1Value: string) {}
+             getValue = () => `${this.ng1Value}-bar`;
+           }
 
-                @Component({selector: 'ng2', template: '{{ value }}'})
-                class Ng2Component {
-                  value: string;
-                  constructor(ng2Service: Ng2Service) { this.value = ng2Service.getValue(); }
-                }
+           @Component({selector: 'ng2', template: '{{ value }}'})
+           class Ng2Component {
+             value: string;
+             constructor(ng2Service: Ng2Service) { this.value = ng2Service.getValue(); }
+           }
 
-                @NgModule({
-                  declarations: [Ng2Component],
-                  entryComponents: [Ng2Component],
-                  imports: [BrowserModule],
-                  providers: [
-                    Ng2Service,
-                    {
-                      provide: 'ng1Value',
-                      useFactory: (i: angular.IInjectorService) => i.get('ng1Value'),
-                      deps: ['$injector'],
-                    },
-                  ],
-                })
-                class Ng2Module {
-                  ngDoBootstrap() {}
-                }
+           @NgModule({
+             declarations: [Ng2Component],
+             entryComponents: [Ng2Component],
+             imports: [BrowserModule],
+             providers: [
+               Ng2Service,
+               {
+                 provide: 'ng1Value',
+                 useFactory: (i: angular.IInjectorService) => i.get('ng1Value'),
+                 deps: ['$injector'],
+               },
+             ],
+           })
+           class Ng2Module {
+             ngDoBootstrap() {}
+           }
 
-                const bootstrapFn = (extraProviders: StaticProvider[]) =>
-                    platformBrowserDynamic(extraProviders).bootstrapModule(Ng2Module);
-                const lazyModuleName = downgradeModule<Ng2Module>(bootstrapFn);
-                const ng1Module =
-                    angular.module('ng1', [lazyModuleName])
-                        .directive(
-                            'ng2', downgradeComponent({component: Ng2Component, propagateDigest}))
-                        .value('ng1Value', 'foo');
+           const bootstrapFn = (extraProviders: StaticProvider[]) =>
+               platformBrowserDynamic(extraProviders).bootstrapModule(Ng2Module);
+           const lazyModuleName = downgradeModule<Ng2Module>(bootstrapFn);
+           const ng1Module =
+               angular.module('ng1', [lazyModuleName])
+                   .directive('ng2', downgradeComponent({component: Ng2Component, propagateDigest}))
+                   .value('ng1Value', 'foo');
 
-                const element = html('<div><ng2 ng-if="loadNg2"></ng2></div>');
-                const $injector = angular.bootstrap(element, [ng1Module.name]);
-                const $rootScope = $injector.get($ROOT_SCOPE) as angular.IRootScopeService;
+           const element = html('<div><ng2 ng-if="loadNg2"></ng2></div>');
+           const $injector = angular.bootstrap(element, [ng1Module.name]);
+           const $rootScope = $injector.get($ROOT_SCOPE) as angular.IRootScopeService;
 
-                expect(element.textContent).toBe('');
-                expect(() => $injector.get(INJECTOR_KEY)).toThrowError();
+           expect(element.textContent).toBe('');
+           expect(() => $injector.get(INJECTOR_KEY)).toThrowError();
 
-                $rootScope.$apply('loadNg2 = true');
-                expect(element.textContent).toBe('');
-                expect(() => $injector.get(INJECTOR_KEY)).toThrowError();
+           $rootScope.$apply('loadNg2 = true');
+           expect(element.textContent).toBe('');
+           expect(() => $injector.get(INJECTOR_KEY)).toThrowError();
 
-                // Wait for the module to be bootstrapped.
-                setTimeout(() => {
-                  expect(() => $injector.get(INJECTOR_KEY)).not.toThrow();
+           // Wait for the module to be bootstrapped.
+           setTimeout(() => {
+             expect(() => $injector.get(INJECTOR_KEY)).not.toThrow();
 
-                  // Wait for `$evalAsync()` to propagate inputs.
-                  setTimeout(() => expect(element.textContent).toBe('foo-bar'));
-                });
-              }));
+             // Wait for `$evalAsync()` to propagate inputs.
+             setTimeout(() => expect(element.textContent).toBe('foo-bar'));
+           });
+         }));
 
       it('should create components inside the Angular zone', async(() => {
            @Component({selector: 'ng2', template: 'In the zone: {{ inTheZone }}'})

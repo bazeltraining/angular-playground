@@ -54,7 +54,7 @@ import {
 // clang-format on
 import {ResourceLoader} from '@angular/compiler';
 
-import {clearResolutionOfComponentResourcesQueue, resolveComponentResources} from '../../src/metadata/resource_loading';
+import {clearResolutionOfComponentResourcesQueue, componentNeedsResolution, resolveComponentResources} from '../../src/metadata/resource_loading';
 import {ComponentFixture} from './component_fixture';
 import {MetadataOverride} from './metadata_override';
 import {ComponentResolver, DirectiveResolver, NgModuleResolver, PipeResolver, Resolver} from './resolvers';
@@ -64,6 +64,8 @@ import {ComponentFixtureAutoDetect, ComponentFixtureNoNgZone, TestBedStatic, Tes
 let _nextRootElementId = 0;
 
 const EMPTY_ARRAY: Type<any>[] = [];
+
+const UNDEFINED: Symbol = Symbol('UNDEFINED');
 
 // Resolvers for Angular decorators
 type Resolvers = {
@@ -311,6 +313,7 @@ export class TestBedRender3 implements Injector, TestBed {
     // reset test module config
     this._providers = [];
     this._compilerOptions = [];
+    this._compilerProviders = [];
     this._declarations = [];
     this._imports = [];
     this._schemas = [];
@@ -371,6 +374,8 @@ export class TestBedRender3 implements Injector, TestBed {
     const declarations: Type<any>[] = flatten(this._declarations || EMPTY_ARRAY, resolveForwardRef);
 
     const componentOverrides: [Type<any>, Component][] = [];
+    let hasAsyncResources = false;
+
     // Compile the components declared by this module
     declarations.forEach(declaration => {
       const component = resolvers.component.resolve(declaration);
@@ -379,25 +384,34 @@ export class TestBedRender3 implements Injector, TestBed {
         const metadata = {...component};
         compileComponent(declaration, metadata);
         componentOverrides.push([declaration, metadata]);
+        hasAsyncResources = hasAsyncResources || componentNeedsResolution(component);
       }
     });
 
-    let resourceLoader: ResourceLoader;
+    const overrideComponents = () => {
+      componentOverrides.forEach((override: [Type<any>, Component]) => {
+        // Override the existing metadata, ensuring that the resolved resources
+        // are only available until the next TestBed reset (when `resetTestingModule` is called)
+        this.overrideComponent(override[0], {set: override[1]});
+      });
+    };
 
-    return resolveComponentResources(url => {
-             if (!resourceLoader) {
-               resourceLoader = this.compilerInjector.get(ResourceLoader);
-             }
-             return Promise.resolve(resourceLoader.get(url));
-           })
-        .then(() => {
-          componentOverrides.forEach((override: [Type<any>, Component]) => {
-            // Once resolved, we override the existing metadata, ensuring that the resolved
-            // resources
-            // are only available until the next TestBed reset (when `resetTestingModule` is called)
-            this.overrideComponent(override[0], {set: override[1]});
-          });
-        });
+    // If the component has no async resources (templateUrl, styleUrls), we can finish
+    // synchronously. This is important so that users who mistakenly treat `compileComponents`
+    // as synchronous don't encounter an error, as ViewEngine was tolerant of this.
+    if (!hasAsyncResources) {
+      overrideComponents();
+      return Promise.resolve();
+    } else {
+      let resourceLoader: ResourceLoader;
+      return resolveComponentResources(url => {
+               if (!resourceLoader) {
+                 resourceLoader = this.compilerInjector.get(ResourceLoader);
+               }
+               return Promise.resolve(resourceLoader.get(url));
+             })
+          .then(overrideComponents);
+    }
   }
 
   get(token: any, notFoundValue: any = Injector.THROW_IF_NOT_FOUND): any {
@@ -405,7 +419,8 @@ export class TestBedRender3 implements Injector, TestBed {
     if (token === TestBedRender3) {
       return this;
     }
-    return this._moduleRef.injector.get(token, notFoundValue);
+    const result = this._moduleRef.injector.get(token, UNDEFINED);
+    return result === UNDEFINED ? this.compilerInjector.get(token, notFoundValue) : result;
   }
 
   execute(tokens: any[], fn: Function, context?: any): any {
@@ -590,8 +605,8 @@ export class TestBedRender3 implements Injector, TestBed {
   }
 
   get compilerInjector(): Injector {
-    if (this._compilerInjector !== undefined) {
-      this._compilerInjector;
+    if (this._compilerInjector !== null) {
+      return this._compilerInjector;
     }
 
     const providers: StaticProvider[] = [];

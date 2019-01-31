@@ -6,13 +6,14 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import {Expression, LiteralArrayExpr, R3InjectorMetadata, R3NgModuleMetadata, R3Reference, Statement, WrappedNodeExpr, compileInjector, compileNgModule} from '@angular/compiler';
+import {Expression, ExternalExpr, InvokeFunctionExpr, LiteralArrayExpr, R3Identifiers, R3InjectorMetadata, R3NgModuleMetadata, R3Reference, Statement, WrappedNodeExpr, compileInjector, compileNgModule} from '@angular/compiler';
 import * as ts from 'typescript';
 
 import {ErrorCode, FatalDiagnosticError} from '../../diagnostics';
 import {Reference, ResolvedReference} from '../../imports';
 import {PartialEvaluator, ResolvedValue} from '../../partial_evaluator';
 import {Decorator, ReflectionHost, reflectObjectLiteral, typeNodeToValueExpr} from '../../reflection';
+import {NgModuleRouteAnalyzer} from '../../routing';
 import {AnalysisOutput, CompileResult, DecoratorHandler} from '../../transform';
 
 import {generateSetClassMetadataCall} from './metadata';
@@ -24,6 +25,7 @@ export interface NgModuleAnalysis {
   ngModuleDef: R3NgModuleMetadata;
   ngInjectorDef: R3InjectorMetadata;
   metadataStmt: Statement|null;
+  declarations: Reference<ts.Declaration>[];
 }
 
 /**
@@ -35,7 +37,7 @@ export class NgModuleDecoratorHandler implements DecoratorHandler<NgModuleAnalys
   constructor(
       private reflector: ReflectionHost, private evaluator: PartialEvaluator,
       private scopeRegistry: SelectorScopeRegistry, private referencesRegistry: ReferencesRegistry,
-      private isCore: boolean) {}
+      private isCore: boolean, private routeAnalyzer: NgModuleRouteAnalyzer|null) {}
 
   detect(node: ts.Declaration, decorators: Decorator[]|null): Decorator|undefined {
     if (!decorators) {
@@ -77,18 +79,20 @@ export class NgModuleDecoratorHandler implements DecoratorHandler<NgModuleAnalys
       declarations = this.resolveTypeList(expr, declarationMeta, 'declarations');
     }
     let imports: Reference<ts.Declaration>[] = [];
+    let rawImports: ts.Expression|null = null;
     if (ngModule.has('imports')) {
-      const expr = ngModule.get('imports') !;
+      rawImports = ngModule.get('imports') !;
       const importsMeta = this.evaluator.evaluate(
-          expr, ref => this._extractModuleFromModuleWithProvidersFn(ref.node));
-      imports = this.resolveTypeList(expr, importsMeta, 'imports');
+          rawImports, ref => this._extractModuleFromModuleWithProvidersFn(ref.node));
+      imports = this.resolveTypeList(rawImports, importsMeta, 'imports');
     }
     let exports: Reference<ts.Declaration>[] = [];
+    let rawExports: ts.Expression|null = null;
     if (ngModule.has('exports')) {
-      const expr = ngModule.get('exports') !;
+      rawExports = ngModule.get('exports') !;
       const exportsMeta = this.evaluator.evaluate(
-          expr, ref => this._extractModuleFromModuleWithProvidersFn(ref.node));
-      exports = this.resolveTypeList(expr, exportsMeta, 'exports');
+          rawExports, ref => this._extractModuleFromModuleWithProvidersFn(ref.node));
+      exports = this.resolveTypeList(rawExports, exportsMeta, 'exports');
       this.referencesRegistry.add(node, ...exports);
     }
     let bootstrap: Reference<ts.Declaration>[] = [];
@@ -123,6 +127,7 @@ export class NgModuleDecoratorHandler implements DecoratorHandler<NgModuleAnalys
     const providers: Expression = ngModule.has('providers') ?
         new WrappedNodeExpr(ngModule.get('providers') !) :
         new LiteralArrayExpr([]);
+    const rawProviders = ngModule.has('providers') ? ngModule.get('providers') ! : null;
 
     const injectorImports: WrappedNodeExpr<ts.Expression>[] = [];
     if (ngModule.has('imports')) {
@@ -130,6 +135,11 @@ export class NgModuleDecoratorHandler implements DecoratorHandler<NgModuleAnalys
     }
     if (ngModule.has('exports')) {
       injectorImports.push(new WrappedNodeExpr(ngModule.get('exports') !));
+    }
+
+    if (this.routeAnalyzer !== null) {
+      this.routeAnalyzer.add(
+          node.getSourceFile(), node.name !.text, rawImports, rawExports, rawProviders);
     }
 
     const ngInjectorDef: R3InjectorMetadata = {
@@ -143,6 +153,7 @@ export class NgModuleDecoratorHandler implements DecoratorHandler<NgModuleAnalys
       analysis: {
         ngModuleDef,
         ngInjectorDef,
+        declarations,
         metadataStmt: generateSetClassMetadataCall(node, this.reflector, this.isCore),
       },
       factorySymbolName: node.name !== undefined ? node.name.text : undefined,
@@ -155,6 +166,31 @@ export class NgModuleDecoratorHandler implements DecoratorHandler<NgModuleAnalys
     const ngModuleStatements = ngModuleDef.additionalStatements;
     if (analysis.metadataStmt !== null) {
       ngModuleStatements.push(analysis.metadataStmt);
+    }
+    let context = node.getSourceFile();
+    if (context === undefined) {
+      context = ts.getOriginalNode(node).getSourceFile();
+    }
+    for (const decl of analysis.declarations) {
+      if (this.scopeRegistry.requiresRemoteScope(decl.node)) {
+        const scope = this.scopeRegistry.lookupCompilationScopeAsRefs(decl.node);
+        if (scope === null) {
+          continue;
+        }
+        const directives: Expression[] = [];
+        const pipes: Expression[] = [];
+        scope.directives.forEach(
+            (directive, _) => { directives.push(directive.ref.toExpression(context) !); });
+        scope.pipes.forEach(pipe => pipes.push(pipe.toExpression(context) !));
+        const directiveArray = new LiteralArrayExpr(directives);
+        const pipesArray = new LiteralArrayExpr(pipes);
+        const declExpr = decl.toExpression(context) !;
+        const setComponentScope = new ExternalExpr(R3Identifiers.setComponentScope);
+        const callExpr =
+            new InvokeFunctionExpr(setComponentScope, [declExpr, directiveArray, pipesArray]);
+
+        ngModuleStatements.push(callExpr.toStmt());
+      }
     }
     return [
       {
@@ -188,11 +224,12 @@ export class NgModuleDecoratorHandler implements DecoratorHandler<NgModuleAnalys
   }
 
   /**
-   * Given a `FunctionDeclaration` or `MethodDeclaration`, check if it is typed as a
-   * `ModuleWithProviders` and return an expression referencing the module if available.
+   * Given a `FunctionDeclaration`, `MethodDeclaration` or `FunctionExpression`, check if it is
+   * typed as a `ModuleWithProviders` and return an expression referencing the module if available.
    */
   private _extractModuleFromModuleWithProvidersFn(node: ts.FunctionDeclaration|
-                                                  ts.MethodDeclaration): ts.Expression|null {
+                                                  ts.MethodDeclaration|
+                                                  ts.FunctionExpression): ts.Expression|null {
     const type = node.type || null;
     return type &&
         (this._reflectModuleFromTypeParam(type) || this._reflectModuleFromLiteralType(type));

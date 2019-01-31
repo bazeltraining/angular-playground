@@ -8,8 +8,8 @@
 
 import * as ts from 'typescript';
 
-import {ClassMember, ClassMemberKind, Decorator, FunctionDefinition, Parameter, reflectObjectLiteral} from '../../../ngtsc/reflection';
-import {getNameText} from '../utils';
+import {ClassMember, ClassMemberKind, Declaration, Decorator, FunctionDefinition, Parameter, reflectObjectLiteral} from '../../../ngtsc/reflection';
+import {getNameText, hasNameIdentifier} from '../utils';
 
 import {Esm2015ReflectionHost, ParamInfo, getPropertyValueFromSymbol, isAssignmentStatement} from './esm2015_host';
 
@@ -63,7 +63,7 @@ export class Esm5ReflectionHost extends Esm2015ReflectionHost {
    * Find a symbol for a node that we think is a class.
    *
    * In ES5, the implementation of a class is a function expression that is hidden inside an IIFE.
-   * So we need to dig around inside to get hold of the "class" symbol.
+   * So we might need to dig around inside to get hold of the "class" symbol.
    *
    * `node` might be one of:
    * - A class declaration (from a declaration file).
@@ -87,33 +87,40 @@ export class Esm5ReflectionHost extends Esm2015ReflectionHost {
       if (!innerClassIdentifier) return undefined;
 
       return this.checker.getSymbolAtLocation(innerClassIdentifier);
-    } else if (ts.isFunctionDeclaration(node)) {
-      // It might be the function expression inside the IIFE. We need to go 5 levels up...
-
-      // 1. IIFE body.
-      let outerNode = node.parent;
-      if (!outerNode || !ts.isBlock(outerNode)) return undefined;
-
-      // 2. IIFE function expression.
-      outerNode = outerNode.parent;
-      if (!outerNode || !ts.isFunctionExpression(outerNode)) return undefined;
-
-      // 3. IIFE call expression.
-      outerNode = outerNode.parent;
-      if (!outerNode || !ts.isCallExpression(outerNode)) return undefined;
-
-      // 4. Parenthesis around IIFE.
-      outerNode = outerNode.parent;
-      if (!outerNode || !ts.isParenthesizedExpression(outerNode)) return undefined;
-
-      // 5. Outer variable declaration.
-      outerNode = outerNode.parent;
-      if (!outerNode || !ts.isVariableDeclaration(outerNode)) return undefined;
-
-      return this.getClassSymbol(outerNode);
     }
 
-    return undefined;
+    const outerClassNode = getClassDeclarationFromInnerFunctionDeclaration(node);
+
+    return outerClassNode && this.getClassSymbol(outerClassNode);
+  }
+
+  /**
+   * Trace an identifier to its declaration, if possible.
+   *
+   * This method attempts to resolve the declaration of the given identifier, tracing back through
+   * imports and re-exports until the original declaration statement is found. A `Declaration`
+   * object is returned if the original declaration is found, or `null` is returned otherwise.
+   *
+   * In ES5, the implementation of a class is a function expression that is hidden inside an IIFE.
+   * If we are looking for the declaration of the identifier of the inner function expression, we
+   * will get hold of the outer "class" variable declaration and return its identifier instead. See
+   * `getClassDeclarationFromInnerFunctionDeclaration()` for more info.
+   *
+   * @param id a TypeScript `ts.Identifier` to trace back to a declaration.
+   *
+   * @returns metadata about the `Declaration` if the original declaration is found, or `null`
+   * otherwise.
+   */
+  getDeclarationOfIdentifier(id: ts.Identifier): Declaration|null {
+    // Get the identifier for the outer class node (if any).
+    const outerClassNode = getClassDeclarationFromInnerFunctionDeclaration(id.parent);
+
+    if (outerClassNode && hasNameIdentifier(outerClassNode)) {
+      id = outerClassNode.name;
+    }
+
+    // Resolve the identifier to a Symbol, and return the declaration of that.
+    return super.getDeclarationOfIdentifier(id);
   }
 
   /**
@@ -208,24 +215,69 @@ export class Esm5ReflectionHost extends Esm2015ReflectionHost {
   /**
    * Reflect over a symbol and extract the member information, combining it with the
    * provided decorator information, and whether it is a static member.
+   *
+   * If a class member uses accessors (e.g getters and/or setters) then it gets downleveled
+   * in ES5 to a single `Object.defineProperty()` call. In that case we must parse this
+   * call to extract the one or two ClassMember objects that represent the accessors.
+   *
    * @param symbol the symbol for the member to reflect over.
    * @param decorators an array of decorators associated with the member.
    * @param isStatic true if this member is static, false if it is an instance property.
    * @returns the reflected member information, or null if the symbol is not a member.
    */
-  protected reflectMember(symbol: ts.Symbol, decorators?: Decorator[], isStatic?: boolean):
-      ClassMember|null {
-    const member = super.reflectMember(symbol, decorators, isStatic);
-    if (member && member.kind === ClassMemberKind.Method && member.isStatic && member.node &&
-        ts.isPropertyAccessExpression(member.node) && member.node.parent &&
-        ts.isBinaryExpression(member.node.parent) &&
-        ts.isFunctionExpression(member.node.parent.right)) {
-      // Recompute the implementation for this member:
-      // ES5 static methods are variable declarations so the declaration is actually the
-      // initializer of the variable assignment
-      member.implementation = member.node.parent.right;
+  protected reflectMembers(symbol: ts.Symbol, decorators?: Decorator[], isStatic?: boolean):
+      ClassMember[]|null {
+    const node = symbol.valueDeclaration || symbol.declarations && symbol.declarations[0];
+    const propertyDefinition = getPropertyDefinition(node);
+    if (propertyDefinition) {
+      const members: ClassMember[] = [];
+      if (propertyDefinition.setter) {
+        members.push({
+          node,
+          implementation: propertyDefinition.setter,
+          kind: ClassMemberKind.Setter,
+          type: null,
+          name: symbol.name,
+          nameNode: null,
+          value: null,
+          isStatic: isStatic || false,
+          decorators: decorators || [],
+        });
+
+        // Prevent attaching the decorators to a potential getter. In ES5, we can't tell where the
+        // decorators were originally attached to, however we only want to attach them to a single
+        // `ClassMember` as otherwise ngtsc would handle the same decorators twice.
+        decorators = undefined;
+      }
+      if (propertyDefinition.getter) {
+        members.push({
+          node,
+          implementation: propertyDefinition.getter,
+          kind: ClassMemberKind.Getter,
+          type: null,
+          name: symbol.name,
+          nameNode: null,
+          value: null,
+          isStatic: isStatic || false,
+          decorators: decorators || [],
+        });
+      }
+      return members;
     }
-    return member;
+
+    const members = super.reflectMembers(symbol, decorators, isStatic);
+    members && members.forEach(member => {
+      if (member && member.kind === ClassMemberKind.Method && member.isStatic && member.node &&
+          ts.isPropertyAccessExpression(member.node) && member.node.parent &&
+          ts.isBinaryExpression(member.node.parent) &&
+          ts.isFunctionExpression(member.node.parent.right)) {
+        // Recompute the implementation for this member:
+        // ES5 static methods are variable declarations so the declaration is actually the
+        // initializer of the variable assignment
+        member.implementation = member.node.parent.right;
+      }
+    });
+    return members;
   }
 
   /**
@@ -245,6 +297,106 @@ export class Esm5ReflectionHost extends Esm2015ReflectionHost {
 }
 
 ///////////// Internal Helpers /////////////
+
+/**
+ * Represents the details about property definitions that were set using `Object.defineProperty`.
+ */
+interface PropertyDefinition {
+  setter: ts.FunctionExpression|null;
+  getter: ts.FunctionExpression|null;
+}
+
+/**
+ * In ES5, getters and setters have been downleveled into call expressions of
+ * `Object.defineProperty`, such as
+ *
+ * ```
+ * Object.defineProperty(Clazz.prototype, "property", {
+ *   get: function () {
+ *       return 'value';
+ *   },
+ *   set: function (value) {
+ *       this.value = value;
+ *   },
+ *   enumerable: true,
+ *   configurable: true
+ * });
+ * ```
+ *
+ * This function inspects the given node to determine if it corresponds with such a call, and if so
+ * extracts the `set` and `get` function expressions from the descriptor object, if they exist.
+ *
+ * @param node The node to obtain the property definition from.
+ * @returns The property definition if the node corresponds with accessor, null otherwise.
+ */
+function getPropertyDefinition(node: ts.Node): PropertyDefinition|null {
+  if (!ts.isCallExpression(node)) return null;
+
+  const fn = node.expression;
+  if (!ts.isPropertyAccessExpression(fn) || !ts.isIdentifier(fn.expression) ||
+      fn.expression.text !== 'Object' || fn.name.text !== 'defineProperty')
+    return null;
+
+  const descriptor = node.arguments[2];
+  if (!descriptor || !ts.isObjectLiteralExpression(descriptor)) return null;
+
+  return {
+    setter: readPropertyFunctionExpression(descriptor, 'set'),
+    getter: readPropertyFunctionExpression(descriptor, 'get'),
+  };
+}
+
+function readPropertyFunctionExpression(object: ts.ObjectLiteralExpression, name: string) {
+  const property = object.properties.find(
+      (p): p is ts.PropertyAssignment =>
+          ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === name);
+
+  return property && ts.isFunctionExpression(property.initializer) && property.initializer || null;
+}
+
+/**
+ * Get the actual (outer) declaration of a class.
+ *
+ * In ES5, the implementation of a class is a function expression that is hidden inside an IIFE and
+ * returned to be assigned to a variable outside the IIFE, which is what the rest of the program
+ * interacts with.
+ *
+ * Given the inner function declaration, we want to get to the declaration of the outer variable
+ * that represents the class.
+ *
+ * @param node a node that could be the function expression inside an ES5 class IIFE.
+ * @returns the outer variable declaration or `undefined` if it is not a "class".
+ */
+function getClassDeclarationFromInnerFunctionDeclaration(node: ts.Node): ts.VariableDeclaration|
+    undefined {
+  if (ts.isFunctionDeclaration(node)) {
+    // It might be the function expression inside the IIFE. We need to go 5 levels up...
+
+    // 1. IIFE body.
+    let outerNode = node.parent;
+    if (!outerNode || !ts.isBlock(outerNode)) return undefined;
+
+    // 2. IIFE function expression.
+    outerNode = outerNode.parent;
+    if (!outerNode || !ts.isFunctionExpression(outerNode)) return undefined;
+
+    // 3. IIFE call expression.
+    outerNode = outerNode.parent;
+    if (!outerNode || !ts.isCallExpression(outerNode)) return undefined;
+
+    // 4. Parenthesis around IIFE.
+    outerNode = outerNode.parent;
+    if (!outerNode || !ts.isParenthesizedExpression(outerNode)) return undefined;
+
+    // 5. Outer variable declaration.
+    outerNode = outerNode.parent;
+    if (!outerNode || !ts.isVariableDeclaration(outerNode)) return undefined;
+
+    return outerNode;
+  }
+
+  return undefined;
+}
 
 function getIifeBody(declaration: ts.VariableDeclaration): ts.Block|undefined {
   if (!declaration.initializer || !ts.isParenthesizedExpression(declaration.initializer)) {

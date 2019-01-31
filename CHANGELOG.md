@@ -1,3 +1,82 @@
+<a name="8.0.0-beta.2"></a>
+# [8.0.0-beta.2](https://github.com/angular/angular/compare/8.0.0-beta.1...8.0.0-beta.2) (2019-01-30)
+
+
+### Bug Fixes
+
+* **bazel:** also pass afterDeclarations transformers to emitWithTsickle ([#28342](https://github.com/angular/angular/issues/28342)) ([70e426b](https://github.com/angular/angular/commit/70e426b))
+* **forms:** don't override form group's dirty state when disabling controls ([#24591](https://github.com/angular/angular/issues/24591)) ([ef67282](https://github.com/angular/angular/commit/ef67282))
+
+
+### Features
+
+* **compiler-cli:** expose ngtsc as a TscPlugin ([#28435](https://github.com/angular/angular/issues/28435)) ([a227c52](https://github.com/angular/angular/commit/a227c52))
+
+
+### Performance Improvements
+
+* **core:** be more consistent about typeof checks ([#28400](https://github.com/angular/angular/issues/28400)) ([9af18c2](https://github.com/angular/angular/commit/9af18c2))
+
+
+
+<a name="7.2.3"></a>
+## [7.2.3](https://github.com/angular/angular/compare/7.2.2...7.2.3) (2019-01-30)
+
+
+### Bug Fixes
+
+* **bazel:** add [@npm](https://github.com/npm)//tslib dep to e2e ts_library target in bazel-workspace schematic ([#28358](https://github.com/angular/angular/issues/28358)) ([8cee56e](https://github.com/angular/angular/commit/8cee56e))
+* **bazel:** Bazel-workspace schematics should run in ScopedTree ([#28349](https://github.com/angular/angular/issues/28349)) ([260ac20](https://github.com/angular/angular/commit/260ac20))
+* **bazel:** Builder should invoke local bazel/iblaze ([#28303](https://github.com/angular/angular/issues/28303)) ([12b8a6e](https://github.com/angular/angular/commit/12b8a6e))
+* **bazel:** ng-new should run yarn install ([#28381](https://github.com/angular/angular/issues/28381)) ([a9d46e4](https://github.com/angular/angular/commit/a9d46e4))
+
+
+### Performance Improvements
+
+* yarn version upgrade ([#28360](https://github.com/angular/angular/issues/28360)) ([cc1b2a5](https://github.com/angular/angular/commit/cc1b2a5))
+
+
+
+<a name="8.0.0-beta.1"></a>
+# [8.0.0-beta.1](https://github.com/angular/angular/compare/8.0.0-beta.0...8.0.0-beta.1) (2019-01-22)
+
+
+### Bug Fixes
+
+* **bazel:** increase node memory limit for ng_module rule to prevent OOM for big modules ([#28237](https://github.com/angular/angular/issues/28237)) ([73616ab](https://github.com/angular/angular/commit/73616ab))
+* **router:** `skipLocationChange` with named outlets ([#28300](https://github.com/angular/angular/issues/28300)) ([50df897](https://github.com/angular/angular/commit/50df897)), closes [#27680](https://github.com/angular/angular/issues/27680) [#28200](https://github.com/angular/angular/issues/28200)
+
+
+### Features
+
+* **bazel:** Add support for SASS ([#28167](https://github.com/angular/angular/issues/28167)) ([f59f18c](https://github.com/angular/angular/commit/f59f18c))
+* **compiler-cli:** resolve generated Sass/Less files to .css inputs ([#28166](https://github.com/angular/angular/issues/28166)) ([a58fd21](https://github.com/angular/angular/commit/a58fd21))
+* **forms:** add `markAllAsTouched()` to `AbstractControl` ([#26812](https://github.com/angular/angular/issues/26812)) ([45bf911](https://github.com/angular/angular/commit/45bf911)), closes [#19400](https://github.com/angular/angular/issues/19400)
+
+
+### Reverts
+
+* "ci: use image based cache for windows BuildKite ([#27990](https://github.com/angular/angular/issues/27990))" ([#28160](https://github.com/angular/angular/issues/28160)) ([7bdf3fe](https://github.com/angular/angular/commit/7bdf3fe))
+
+
+
+<a name="7.2.2"></a>
+## [7.2.2](https://github.com/angular/angular/compare/7.2.1...7.2.2) (2019-01-22)
+
+
+### Bug Fixes
+
+* **bazel:** Fix integration test after v8 bump ([#28194](https://github.com/angular/angular/issues/28194)) ([7b772e9](https://github.com/angular/angular/commit/7b772e9)), closes [#28142](https://github.com/angular/angular/issues/28142)
+* **router:** `skipLocationChange` with named outlets ([#28301](https://github.com/angular/angular/issues/28301)) ([32737a6](https://github.com/angular/angular/commit/32737a6)), closes [#27680](https://github.com/angular/angular/issues/27680) [#28200](https://github.com/angular/angular/issues/28200)
+
+
+### Features
+
+* **bazel:** Add support for SASS ([#28167](https://github.com/angular/angular/issues/28167)) ([a4d9192](https://github.com/angular/angular/commit/a4d9192))
+* **compiler-cli:** resolve generated Sass/Less files to .css inputs ([#28166](https://github.com/angular/angular/issues/28166)) ([4c00059](https://github.com/angular/angular/commit/4c00059))
+
+
+
 <a name="8.0.0-beta.0"></a>
 # [8.0.0-beta.0](https://github.com/angular/angular/compare/7.2.0...8.0.0-beta.0) (2019-01-16)
 

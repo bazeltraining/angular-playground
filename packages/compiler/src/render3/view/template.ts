@@ -10,7 +10,7 @@ import {flatten, sanitizeIdentifier} from '../../compile_metadata';
 import {BindingForm, BuiltinFunctionCall, LocalResolver, convertActionBinding, convertPropertyBinding} from '../../compiler_util/expression_converter';
 import {ConstantPool} from '../../constant_pool';
 import * as core from '../../core';
-import {AST, ASTWithSource, AstMemoryEfficientTransformer, BindingPipe, BindingType, FunctionCall, ImplicitReceiver, Interpolation, LiteralArray, LiteralMap, LiteralPrimitive, ParsedEvent, ParsedEventType, PropertyRead} from '../../expression_parser/ast';
+import {AST, AstMemoryEfficientTransformer, BindingPipe, BindingType, FunctionCall, ImplicitReceiver, Interpolation, LiteralArray, LiteralMap, LiteralPrimitive, ParsedEventType, PropertyRead} from '../../expression_parser/ast';
 import {Lexer} from '../../expression_parser/lexer';
 import {Parser} from '../../expression_parser/parser';
 import * as i18n from '../../i18n/i18n_ast';
@@ -31,7 +31,6 @@ import {Identifiers as R3} from '../r3_identifiers';
 import {htmlAstToRender3Ast} from '../r3_template_transform';
 import {prepareSyntheticListenerFunctionName, prepareSyntheticListenerName, prepareSyntheticPropertyName} from '../util';
 
-import {R3QueryMetadata} from './api';
 import {I18nContext} from './i18n/context';
 import {I18nMetaVisitor} from './i18n/meta';
 import {getSerializedI18nContent} from './i18n/serializer';
@@ -161,14 +160,10 @@ export class TemplateDefinitionBuilder implements t.Visitor<void>, LocalResolver
       private constantPool: ConstantPool, parentBindingScope: BindingScope, private level = 0,
       private contextName: string|null, private i18nContext: I18nContext|null,
       private templateIndex: number|null, private templateName: string|null,
-      private viewQueries: R3QueryMetadata[], private directiveMatcher: SelectorMatcher|null,
-      private directives: Set<o.Expression>, private pipeTypeByName: Map<string, o.Expression>,
-      private pipes: Set<o.Expression>, private _namespace: o.ExternalReference,
-      private relativeContextFilePath: string, private i18nUseExternalIds: boolean) {
-    // view queries can take up space in data and allocation happens earlier (in the "viewQuery"
-    // function)
-    this._dataIndex = viewQueries.length;
-
+      private directiveMatcher: SelectorMatcher|null, private directives: Set<o.Expression>,
+      private pipeTypeByName: Map<string, o.Expression>, private pipes: Set<o.Expression>,
+      private _namespace: o.ExternalReference, private relativeContextFilePath: string,
+      private i18nUseExternalIds: boolean) {
     this._bindingScope = parentBindingScope.nestedScope(level);
 
     // Turn the relative context file path into an identifier by replacing non-alphanumeric
@@ -567,7 +562,9 @@ export class TemplateDefinitionBuilder implements t.Visitor<void>, LocalResolver
       }
     });
 
-    outputAttrs.forEach(attr => attributes.push(o.literal(attr.name), o.literal(attr.value)));
+    outputAttrs.forEach(attr => {
+      attributes.push(...getAttributeNameLiterals(attr.name), o.literal(attr.value));
+    });
 
     // this will build the instructions so that they fall into the following syntax
     // add attributes for directive matching purposes
@@ -719,13 +716,25 @@ export class TemplateDefinitionBuilder implements t.Visitor<void>, LocalResolver
         const value = input.value.visit(this._valueConverter);
         if (value !== undefined) {
           const params: any[] = [];
+          const [attrNamespace, attrName] = splitNsName(input.name);
           const isAttributeBinding = input.type === BindingType.Attribute;
           const sanitizationRef = resolveSanitizationFn(input.securityContext, isAttributeBinding);
           if (sanitizationRef) params.push(sanitizationRef);
+          if (attrNamespace) {
+            const namespaceLiteral = o.literal(attrNamespace);
+
+            if (sanitizationRef) {
+              params.push(namespaceLiteral);
+            } else {
+              // If there wasn't a sanitization ref, we need to add
+              // an extra param so that we can pass in the namespace.
+              params.push(o.literal(null), namespaceLiteral);
+            }
+          }
           this.allocateBindingSlots(value);
           this.updateInstruction(input.sourceSpan, instruction, () => {
             return [
-              o.literal(elementIndex), o.literal(input.name),
+              o.literal(elementIndex), o.literal(attrName),
               this.convertPropertyBinding(implicit, value), ...params
             ];
           });
@@ -769,7 +778,10 @@ export class TemplateDefinitionBuilder implements t.Visitor<void>, LocalResolver
     const parameters: o.Expression[] = [
       o.literal(templateIndex),
       o.variable(templateName),
-      o.literal(template.tagName),
+
+      // We don't care about the tag's namespace here, because we infer
+      // it based on the parent nodes inside the template instruction.
+      o.literal(template.tagName ? splitNsName(template.tagName)[1] : template.tagName),
     ];
 
     // find directives matching on a given <ng-template> node
@@ -804,9 +816,8 @@ export class TemplateDefinitionBuilder implements t.Visitor<void>, LocalResolver
     // Create the template function
     const templateVisitor = new TemplateDefinitionBuilder(
         this.constantPool, this._bindingScope, this.level + 1, contextName, this.i18n,
-        templateIndex, templateName, [], this.directiveMatcher, this.directives,
-        this.pipeTypeByName, this.pipes, this._namespace, this.fileBasedI18nSuffix,
-        this.i18nUseExternalIds);
+        templateIndex, templateName, this.directiveMatcher, this.directives, this.pipeTypeByName,
+        this.pipes, this._namespace, this.fileBasedI18nSuffix, this.i18nUseExternalIds);
 
     // Nested templates must not be visited until after their parent templates have completed
     // processing, so they are queued here until after the initial pass. Otherwise, we wouldn't
@@ -1035,10 +1046,8 @@ export class TemplateDefinitionBuilder implements t.Visitor<void>, LocalResolver
     function addAttrExpr(key: string | number, value?: o.Expression): void {
       if (typeof key === 'string') {
         if (!alreadySeen.has(key)) {
-          attrExprs.push(o.literal(key));
-          if (value !== undefined) {
-            attrExprs.push(value);
-          }
+          attrExprs.push(...getAttributeNameLiterals(key));
+          value !== undefined && attrExprs.push(value);
           alreadySeen.add(key);
         }
       } else {
@@ -1259,6 +1268,26 @@ function getLiteralFactory(
   }
 
   return o.importExpr(identifier).callFn(args);
+}
+
+/**
+ * Gets an array of literals that can be added to an expression
+ * to represent the name and namespace of an attribute. E.g.
+ * `:xlink:href` turns into `[AttributeMarker.NamespaceURI, 'xlink', 'href']`.
+ *
+ * @param name Name of the attribute, including the namespace.
+ */
+function getAttributeNameLiterals(name: string): o.LiteralExpr[] {
+  const [attributeNamespace, attributeName] = splitNsName(name);
+  const nameLiteral = o.literal(attributeName);
+
+  if (attributeNamespace) {
+    return [
+      o.literal(core.AttributeMarker.NamespaceURI), o.literal(attributeNamespace), nameLiteral
+    ];
+  }
+
+  return [nameLiteral];
 }
 
 /**

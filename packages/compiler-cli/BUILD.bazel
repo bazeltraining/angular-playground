@@ -24,11 +24,13 @@ ts_library(
     deps = [
         "//packages/compiler",
         "//packages/compiler-cli/src/ngtsc/annotations",
+        "//packages/compiler-cli/src/ngtsc/cycles",
         "//packages/compiler-cli/src/ngtsc/diagnostics",
         "//packages/compiler-cli/src/ngtsc/entry_point",
         "//packages/compiler-cli/src/ngtsc/imports",
         "//packages/compiler-cli/src/ngtsc/partial_evaluator",
         "//packages/compiler-cli/src/ngtsc/reflection",
+        "//packages/compiler-cli/src/ngtsc/routing",
         "//packages/compiler-cli/src/ngtsc/shims",
         "//packages/compiler-cli/src/ngtsc/switch",
         "//packages/compiler-cli/src/ngtsc/transform",
@@ -51,7 +53,9 @@ npm_package(
     ],
     # Do not add more to this list.
     # Dependencies on the full npm_package cause long re-builds.
-    visibility = ["//visibility:private"],
+    visibility = [
+        "//packages/compiler-cli/integrationtest:__pkg__",
+    ],
     deps = [
         ":compiler-cli",
         "//packages/compiler-cli/src/ngcc",

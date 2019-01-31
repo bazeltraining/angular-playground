@@ -6,13 +6,11 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import {SimpleChanges} from '../interface/simple_change';
 import {assertEqual} from '../util/assert';
 
 import {DirectiveDef} from './interfaces/definition';
 import {TNode} from './interfaces/node';
-import {FLAGS, HookData, LView, LViewFlags, TView} from './interfaces/view';
-import {OnChangesDirectiveWrapper, unwrapOnChangesDirectiveWrapper} from './onchanges_util';
+import {FLAGS, HookData, InitPhaseState, LView, LViewFlags, TView} from './interfaces/view';
 
 
 
@@ -38,12 +36,12 @@ export function registerPreOrderHooks(
   const {onChanges, onInit, doCheck} = directiveDef;
 
   if (onChanges) {
-    (tView.initHooks || (tView.initHooks = [])).push(-directiveIndex, onChanges);
-    (tView.checkHooks || (tView.checkHooks = [])).push(-directiveIndex, onChanges);
+    (tView.initHooks || (tView.initHooks = [])).push(directiveIndex, onChanges);
+    (tView.checkHooks || (tView.checkHooks = [])).push(directiveIndex, onChanges);
   }
 
   if (onInit) {
-    (tView.initHooks || (tView.initHooks = [])).push(directiveIndex, onInit);
+    (tView.initHooks || (tView.initHooks = [])).push(-directiveIndex, onInit);
   }
 
   if (doCheck) {
@@ -79,7 +77,7 @@ export function registerPostOrderHooks(tView: TView, tNode: TNode): void {
     for (let i = tNode.directiveStart, end = tNode.directiveEnd; i < end; i++) {
       const directiveDef = tView.data[i] as DirectiveDef<any>;
       if (directiveDef.afterContentInit) {
-        (tView.contentHooks || (tView.contentHooks = [])).push(i, directiveDef.afterContentInit);
+        (tView.contentHooks || (tView.contentHooks = [])).push(-i, directiveDef.afterContentInit);
       }
 
       if (directiveDef.afterContentChecked) {
@@ -89,7 +87,7 @@ export function registerPostOrderHooks(tView: TView, tNode: TNode): void {
       }
 
       if (directiveDef.afterViewInit) {
-        (tView.viewHooks || (tView.viewHooks = [])).push(i, directiveDef.afterViewInit);
+        (tView.viewHooks || (tView.viewHooks = [])).push(-i, directiveDef.afterViewInit);
       }
 
       if (directiveDef.afterViewChecked) {
@@ -120,9 +118,10 @@ export function registerPostOrderHooks(tView: TView, tNode: TNode): void {
  */
 export function executeInitHooks(
     currentView: LView, tView: TView, checkNoChangesMode: boolean): void {
-  if (!checkNoChangesMode && currentView[FLAGS] & LViewFlags.RunInit) {
-    executeHooks(currentView, tView.initHooks, tView.checkHooks, checkNoChangesMode);
-    currentView[FLAGS] &= ~LViewFlags.RunInit;
+  if (!checkNoChangesMode) {
+    executeHooks(
+        currentView, tView.initHooks, tView.checkHooks, checkNoChangesMode,
+        InitPhaseState.OnInitHooksToBeRun);
   }
 }
 
@@ -137,39 +136,44 @@ export function executeInitHooks(
  */
 export function executeHooks(
     currentView: LView, firstPassHooks: HookData | null, checkHooks: HookData | null,
-    checkNoChangesMode: boolean): void {
+    checkNoChangesMode: boolean, initPhase: number): void {
   if (checkNoChangesMode) return;
-
-  const hooksToCall = currentView[FLAGS] & LViewFlags.FirstLViewPass ? firstPassHooks : checkHooks;
+  const hooksToCall = (currentView[FLAGS] & LViewFlags.InitPhaseStateMask) === initPhase ?
+      firstPassHooks :
+      checkHooks;
   if (hooksToCall) {
-    callHooks(currentView, hooksToCall);
+    callHooks(currentView, hooksToCall, initPhase);
+  }
+  // The init phase state must be always checked here as it may have been recursively updated
+  if ((currentView[FLAGS] & LViewFlags.InitPhaseStateMask) === initPhase &&
+      initPhase !== InitPhaseState.InitPhaseCompleted) {
+    currentView[FLAGS] &= LViewFlags.IndexWithinInitPhaseReset;
+    currentView[FLAGS] += LViewFlags.InitPhaseStateIncrementer;
   }
 }
 
 /**
  * Calls lifecycle hooks with their contexts, skipping init hooks if it's not
- * the first LView pass, and skipping onChanges hooks if there are no changes present.
+ * the first LView pass
  *
  * @param currentView The current view
  * @param arr The array in which the hooks are found
  */
-export function callHooks(currentView: LView, arr: HookData): void {
+export function callHooks(currentView: LView, arr: HookData, initPhase?: number): void {
+  let initHooksCount = 0;
   for (let i = 0; i < arr.length; i += 2) {
-    const directiveIndex = arr[i] as number;
-    const hook = arr[i + 1] as((() => void) | ((changes: SimpleChanges) => void));
-    // Negative indices signal that we're dealing with an `onChanges` hook.
-    const isOnChangesHook = directiveIndex < 0;
-    const directiveOrWrappedDirective =
-        currentView[isOnChangesHook ? -directiveIndex : directiveIndex];
-    const directive = unwrapOnChangesDirectiveWrapper(directiveOrWrappedDirective);
-
-    if (isOnChangesHook) {
-      const onChanges: OnChangesDirectiveWrapper = directiveOrWrappedDirective;
-      const changes = onChanges.changes;
-      if (changes) {
-        onChanges.previous = changes;
-        onChanges.changes = null;
-        hook.call(onChanges.instance, changes);
+    const isInitHook = arr[i] < 0;
+    const directiveIndex = isInitHook ? -arr[i] : arr[i] as number;
+    const directive = currentView[directiveIndex];
+    const hook = arr[i + 1] as() => void;
+    if (isInitHook) {
+      initHooksCount++;
+      const indexWithintInitPhase = currentView[FLAGS] >> LViewFlags.IndexWithinInitPhaseShift;
+      // The init phase state must be always checked here as it may have been recursively updated
+      if (indexWithintInitPhase < initHooksCount &&
+          (currentView[FLAGS] & LViewFlags.InitPhaseStateMask) === initPhase) {
+        currentView[FLAGS] += LViewFlags.IndexWithinInitPhaseIncrementer;
+        hook.call(directive);
       }
     } else {
       hook.call(directive);

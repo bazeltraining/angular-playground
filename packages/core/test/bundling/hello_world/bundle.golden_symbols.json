@@ -87,9 +87,6 @@
     "name": "ObjectUnsubscribedErrorImpl"
   },
   {
-    "name": "OnChangesDirectiveWrapper"
-  },
-  {
     "name": "PARENT"
   },
   {
@@ -103,6 +100,9 @@
   },
   {
     "name": "SANITIZER"
+  },
+  {
+    "name": "TAIL"
   },
   {
     "name": "TVIEW"
@@ -120,6 +120,9 @@
     "name": "__self"
   },
   {
+    "name": "__values"
+  },
+  {
     "name": "__window"
   },
   {
@@ -127,6 +130,9 @@
   },
   {
     "name": "_renderCompCount"
+  },
+  {
+    "name": "addToViewTree"
   },
   {
     "name": "appendChild"
@@ -180,9 +186,6 @@
     "name": "createViewBlueprint"
   },
   {
-    "name": "createViewQuery"
-  },
-  {
     "name": "defaultScheduler"
   },
   {
@@ -202,6 +205,9 @@
   },
   {
     "name": "executeInitHooks"
+  },
+  {
+    "name": "executeViewQueryFn"
   },
   {
     "name": "extractDirectiveDef"
@@ -253,6 +259,9 @@
   },
   {
     "name": "getLViewChild"
+  },
+  {
+    "name": "getNativeAnchorNode"
   },
   {
     "name": "getNativeByTNode"
@@ -321,13 +330,7 @@
     "name": "isCreationMode"
   },
   {
-    "name": "isExactInstanceOf"
-  },
-  {
     "name": "isFactory"
-  },
-  {
-    "name": "isOnChangesDirectiveWrapper"
   },
   {
     "name": "isProceduralRenderer"
@@ -343,6 +346,12 @@
   },
   {
     "name": "namespaceHTML"
+  },
+  {
+    "name": "nativeAppendChild"
+  },
+  {
+    "name": "nativeAppendOrInsertBefore"
   },
   {
     "name": "nativeInsertBefore"
@@ -405,7 +414,7 @@
     "name": "setCurrentDirectiveDef"
   },
   {
-    "name": "setFirstTemplatePass"
+    "name": "setCurrentQueryIndex"
   },
   {
     "name": "setHostBindings"
@@ -433,12 +442,6 @@
   },
   {
     "name": "tickRootContext"
-  },
-  {
-    "name": "unwrapOnChangesDirectiveWrapper"
-  },
-  {
-    "name": "updateViewQuery"
   },
   {
     "name": "viewAttached"

@@ -951,12 +951,12 @@ export function setStyle(
     ngDevMode && ngDevMode.rendererSetStyle++;
     isProceduralRenderer(renderer) ?
         renderer.setStyle(native, prop, value, RendererStyleFlags3.DashCase) :
-        native['style'].setProperty(prop, value);
+        native.style[prop] = value;
   } else {
     ngDevMode && ngDevMode.rendererRemoveStyle++;
     isProceduralRenderer(renderer) ?
         renderer.removeStyle(native, prop, RendererStyleFlags3.DashCase) :
-        native['style'].removeProperty(prop);
+        native.style[prop] = '';
   }
 }
 
@@ -982,14 +982,17 @@ function setClass(
     if (playerBuilder) {
       playerBuilder.setValue(className, add);
     }
-  } else if (add) {
-    ngDevMode && ngDevMode.rendererAddClass++;
-    isProceduralRenderer(renderer) ? renderer.addClass(native, className) :
-                                     native['classList'].add(className);
-  } else {
-    ngDevMode && ngDevMode.rendererRemoveClass++;
-    isProceduralRenderer(renderer) ? renderer.removeClass(native, className) :
-                                     native['classList'].remove(className);
+    // DOMTokenList will throw if we try to add or remove an empty string.
+  } else if (className !== '') {
+    if (add) {
+      ngDevMode && ngDevMode.rendererAddClass++;
+      isProceduralRenderer(renderer) ? renderer.addClass(native, className) :
+                                       native['classList'].add(className);
+    } else {
+      ngDevMode && ngDevMode.rendererRemoveClass++;
+      isProceduralRenderer(renderer) ? renderer.removeClass(native, className) :
+                                       native['classList'].remove(className);
+    }
   }
 }
 

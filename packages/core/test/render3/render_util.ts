@@ -180,7 +180,12 @@ export class ComponentFixture<T> extends BaseFixture {
   }
 
   destroy(): void {
-    this.containerElement.removeChild(this.hostElement);
+    // Skip removing the DOM element if it has already been removed (the view has already
+    // been destroyed).
+    if (this.hostElement.parentNode === this.containerElement) {
+      this.containerElement.removeChild(this.hostElement);
+    }
+
     destroyLView(getRootView(this.component));
   }
 }
@@ -394,7 +399,7 @@ class MockRenderer implements ProceduralRenderer3 {
   destroy(): void {}
   createComment(value: string): RComment { return document.createComment(value); }
   createElement(name: string, namespace?: string|null): RElement {
-    return document.createElement(name);
+    return namespace ? document.createElementNS(namespace, name) : document.createElement(name);
   }
   createText(value: string): RText { return document.createTextNode(value); }
   appendChild(parent: RElement, newChild: RNode): void { parent.appendChild(newChild); }

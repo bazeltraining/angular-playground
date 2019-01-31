@@ -924,39 +924,36 @@ function declareTests(config?: {useJit: boolean}) {
         expect(getDOM().getProperty(tc.nativeElement, 'id')).toEqual('newId');
       });
 
-      fixmeIvy('FW-681: not possible to retrieve host property bindings from TView')
-          .it('should not use template variables for expressions in hostProperties', () => {
-            @Directive(
-                {selector: '[host-properties]', host: {'[id]': 'id', '[title]': 'unknownProp'}})
-            class DirectiveWithHostProps {
-              id = 'one';
-            }
+      it('should not use template variables for expressions in hostProperties', () => {
+        @Directive({selector: '[host-properties]', host: {'[id]': 'id', '[title]': 'unknownProp'}})
+        class DirectiveWithHostProps {
+          id = 'one';
+        }
 
-            const fixture =
-                TestBed.configureTestingModule({declarations: [MyComp, DirectiveWithHostProps]})
-                    .overrideComponent(MyComp, {
-                      set: {template: `<div *ngFor="let id of ['forId']" host-properties></div>`}
-                    })
-                    .createComponent(MyComp);
-            fixture.detectChanges();
+        const fixture =
+            TestBed.configureTestingModule({declarations: [MyComp, DirectiveWithHostProps]})
+                .overrideComponent(
+                    MyComp,
+                    {set: {template: `<div *ngFor="let id of ['forId']" host-properties></div>`}})
+                .createComponent(MyComp);
+        fixture.detectChanges();
 
-            const tc = fixture.debugElement.children[0];
-            expect(tc.properties['id']).toBe('one');
-            expect(tc.properties['title']).toBe(undefined);
-          });
+        const tc = fixture.debugElement.children[0];
+        expect(tc.properties['id']).toBe('one');
+        expect(tc.properties['title']).toBe(undefined);
+      });
 
-      fixmeIvy('FW-725: Pipes in host bindings fail with a cryptic error')
-          .it('should not allow pipes in hostProperties', () => {
-            @Directive({selector: '[host-properties]', host: {'[id]': 'id | uppercase'}})
-            class DirectiveWithHostProps {
-            }
+      it('should not allow pipes in hostProperties', () => {
+        @Directive({selector: '[host-properties]', host: {'[id]': 'id | uppercase'}})
+        class DirectiveWithHostProps {
+        }
 
-            TestBed.configureTestingModule({declarations: [MyComp, DirectiveWithHostProps]});
-            const template = '<div host-properties></div>';
-            TestBed.overrideComponent(MyComp, {set: {template}});
-            expect(() => TestBed.createComponent(MyComp))
-                .toThrowError(/Host binding expression cannot contain pipes/);
-          });
+        TestBed.configureTestingModule({declarations: [MyComp, DirectiveWithHostProps]});
+        const template = '<div host-properties></div>';
+        TestBed.overrideComponent(MyComp, {set: {template}});
+        expect(() => TestBed.createComponent(MyComp))
+            .toThrowError(/Host binding expression cannot contain pipes/);
+      });
 
       it('should not use template variables for expressions in hostListeners', () => {
         @Directive({selector: '[host-listener]', host: {'(click)': 'doIt(id, unknownProp)'}})
@@ -981,18 +978,17 @@ function declareTests(config?: {useJit: boolean}) {
         expect(dir.receivedArgs).toEqual(['one', undefined]);
       });
 
-      fixmeIvy('FW-742: Pipes in host listeners should throw a descriptive error')
-          .it('should not allow pipes in hostListeners', () => {
-            @Directive({selector: '[host-listener]', host: {'(click)': 'doIt() | somePipe'}})
-            class DirectiveWithHostListener {
-            }
+      it('should not allow pipes in hostListeners', () => {
+        @Directive({selector: '[host-listener]', host: {'(click)': 'doIt() | somePipe'}})
+        class DirectiveWithHostListener {
+        }
 
-            TestBed.configureTestingModule({declarations: [MyComp, DirectiveWithHostListener]});
-            const template = '<div host-listener></div>';
-            TestBed.overrideComponent(MyComp, {set: {template}});
-            expect(() => TestBed.createComponent(MyComp))
-                .toThrowError(/Cannot have a pipe in an action expression/);
-          });
+        TestBed.configureTestingModule({declarations: [MyComp, DirectiveWithHostListener]});
+        const template = '<div host-listener></div>';
+        TestBed.overrideComponent(MyComp, {set: {template}});
+        expect(() => TestBed.createComponent(MyComp))
+            .toThrowError(/Cannot have a pipe in an action expression/);
+      });
 
 
 
@@ -1832,25 +1828,24 @@ function declareTests(config?: {useJit: boolean}) {
 
     if (getDOM().supportsDOMEvents()) {
       describe('svg', () => {
-        fixmeIvy('FW-672: SVG attribute xlink:href is output as :xlink:href (extra ":")')
-            .it('should support svg elements', () => {
-              TestBed.configureTestingModule({declarations: [MyComp]});
-              const template = '<svg><use xlink:href="Port" /></svg>';
-              TestBed.overrideComponent(MyComp, {set: {template}});
-              const fixture = TestBed.createComponent(MyComp);
+        it('should support svg elements', () => {
+          TestBed.configureTestingModule({declarations: [MyComp]});
+          const template = '<svg><use xlink:href="Port" /></svg>';
+          TestBed.overrideComponent(MyComp, {set: {template}});
+          const fixture = TestBed.createComponent(MyComp);
 
-              const el = fixture.nativeElement;
-              const svg = getDOM().childNodes(el)[0];
-              const use = getDOM().childNodes(svg)[0];
-              expect(getDOM().getProperty(<Element>svg, 'namespaceURI'))
-                  .toEqual('http://www.w3.org/2000/svg');
-              expect(getDOM().getProperty(<Element>use, 'namespaceURI'))
-                  .toEqual('http://www.w3.org/2000/svg');
+          const el = fixture.nativeElement;
+          const svg = getDOM().childNodes(el)[0];
+          const use = getDOM().childNodes(svg)[0];
+          expect(getDOM().getProperty(<Element>svg, 'namespaceURI'))
+              .toEqual('http://www.w3.org/2000/svg');
+          expect(getDOM().getProperty(<Element>use, 'namespaceURI'))
+              .toEqual('http://www.w3.org/2000/svg');
 
-              const firstAttribute = getDOM().getProperty(<Element>use, 'attributes')[0];
-              expect(firstAttribute.name).toEqual('xlink:href');
-              expect(firstAttribute.namespaceURI).toEqual('http://www.w3.org/1999/xlink');
-            });
+          const firstAttribute = getDOM().getProperty(<Element>use, 'attributes')[0];
+          expect(firstAttribute.name).toEqual('xlink:href');
+          expect(firstAttribute.namespaceURI).toEqual('http://www.w3.org/1999/xlink');
+        });
 
         it('should support foreignObjects with document fragments', () => {
           TestBed.configureTestingModule({declarations: [MyComp]});
@@ -1874,40 +1869,38 @@ function declareTests(config?: {useJit: boolean}) {
 
       describe('attributes', () => {
 
-        fixmeIvy('FW-672: SVG attribute xlink:href is output as :xlink:href (extra ":")')
-            .it('should support attributes with namespace', () => {
-              TestBed.configureTestingModule({declarations: [MyComp, SomeCmp]});
-              const template = '<svg:use xlink:href="#id" />';
-              TestBed.overrideComponent(SomeCmp, {set: {template}});
-              const fixture = TestBed.createComponent(SomeCmp);
+        it('should support attributes with namespace', () => {
+          TestBed.configureTestingModule({declarations: [MyComp, SomeCmp]});
+          const template = '<svg:use xlink:href="#id" />';
+          TestBed.overrideComponent(SomeCmp, {set: {template}});
+          const fixture = TestBed.createComponent(SomeCmp);
 
-              const useEl = getDOM().firstChild(fixture.nativeElement);
-              expect(getDOM().getAttributeNS(useEl, 'http://www.w3.org/1999/xlink', 'href'))
-                  .toEqual('#id');
-            });
+          const useEl = getDOM().firstChild(fixture.nativeElement);
+          expect(getDOM().getAttributeNS(useEl, 'http://www.w3.org/1999/xlink', 'href'))
+              .toEqual('#id');
+        });
 
-        fixmeIvy('FW-672: SVG attribute xlink:href is output as :xlink:href (extra ":")')
-            .it('should support binding to attributes with namespace', () => {
-              TestBed.configureTestingModule({declarations: [MyComp, SomeCmp]});
-              const template = '<svg:use [attr.xlink:href]="value" />';
-              TestBed.overrideComponent(SomeCmp, {set: {template}});
-              const fixture = TestBed.createComponent(SomeCmp);
+        it('should support binding to attributes with namespace', () => {
+          TestBed.configureTestingModule({declarations: [MyComp, SomeCmp]});
+          const template = '<svg:use [attr.xlink:href]="value" />';
+          TestBed.overrideComponent(SomeCmp, {set: {template}});
+          const fixture = TestBed.createComponent(SomeCmp);
 
-              const cmp = fixture.componentInstance;
-              const useEl = getDOM().firstChild(fixture.nativeElement);
+          const cmp = fixture.componentInstance;
+          const useEl = getDOM().firstChild(fixture.nativeElement);
 
-              cmp.value = '#id';
-              fixture.detectChanges();
+          cmp.value = '#id';
+          fixture.detectChanges();
 
-              expect(getDOM().getAttributeNS(useEl, 'http://www.w3.org/1999/xlink', 'href'))
-                  .toEqual('#id');
+          expect(getDOM().getAttributeNS(useEl, 'http://www.w3.org/1999/xlink', 'href'))
+              .toEqual('#id');
 
-              cmp.value = null;
-              fixture.detectChanges();
+          cmp.value = null;
+          fixture.detectChanges();
 
-              expect(getDOM().hasAttributeNS(useEl, 'http://www.w3.org/1999/xlink', 'href'))
-                  .toEqual(false);
-            });
+          expect(getDOM().hasAttributeNS(useEl, 'http://www.w3.org/1999/xlink', 'href'))
+              .toEqual(false);
+        });
       });
     }
   });

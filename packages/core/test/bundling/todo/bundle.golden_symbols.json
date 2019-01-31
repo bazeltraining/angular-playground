@@ -78,6 +78,9 @@
     "name": "INJECTOR_BLOOM_PARENT_SIZE"
   },
   {
+    "name": "INTERPOLATION_DELIMITER"
+  },
+  {
     "name": "InjectFlags"
   },
   {
@@ -153,9 +156,6 @@
     "name": "ObjectUnsubscribedErrorImpl"
   },
   {
-    "name": "OnChangesDirectiveWrapper"
-  },
-  {
     "name": "Optional"
   },
   {
@@ -193,9 +193,6 @@
   },
   {
     "name": "SWITCH_VIEW_CONTAINER_REF_FACTORY"
-  },
-  {
-    "name": "SimpleChange"
   },
   {
     "name": "SkipSelf"
@@ -274,6 +271,9 @@
   },
   {
     "name": "__spread"
+  },
+  {
+    "name": "__values"
   },
   {
     "name": "__window"
@@ -381,6 +381,9 @@
     "name": "assertTemplate"
   },
   {
+    "name": "assignTViewNodeToLView"
+  },
+  {
     "name": "attachPatchData"
   },
   {
@@ -483,12 +486,6 @@
     "name": "createViewBlueprint"
   },
   {
-    "name": "createViewNode"
-  },
-  {
-    "name": "createViewQuery"
-  },
-  {
     "name": "decreaseElementDepthCount"
   },
   {
@@ -570,6 +567,9 @@
     "name": "executeOnDestroys"
   },
   {
+    "name": "executeViewQueryFn"
+  },
+  {
     "name": "extendStatics"
   },
   {
@@ -592,9 +592,6 @@
   },
   {
     "name": "findViaComponent"
-  },
-  {
-    "name": "firstTemplatePass"
   },
   {
     "name": "forwardRef"
@@ -657,9 +654,6 @@
     "name": "getElementDepthCount"
   },
   {
-    "name": "getFirstTemplatePass"
-  },
-  {
     "name": "getHighestElementOrICUContainer"
   },
   {
@@ -703,6 +697,9 @@
   },
   {
     "name": "getMultiStartIndex"
+  },
+  {
+    "name": "getNativeAnchorNode"
   },
   {
     "name": "getNativeByIndex"
@@ -903,9 +900,6 @@
     "name": "isDirty"
   },
   {
-    "name": "isExactInstanceOf"
-  },
-  {
     "name": "isFactory"
   },
   {
@@ -922,9 +916,6 @@
   },
   {
     "name": "isNodeMatchingSelectorList"
-  },
-  {
-    "name": "isOnChangesDirectiveWrapper"
   },
   {
     "name": "isPositive"
@@ -984,6 +975,12 @@
     "name": "namespaceHTML"
   },
   {
+    "name": "nativeAppendChild"
+  },
+  {
+    "name": "nativeAppendOrInsertBefore"
+  },
+  {
     "name": "nativeInsertBefore"
   },
   {
@@ -1036,12 +1033,6 @@
   },
   {
     "name": "readPatchedLView"
-  },
-  {
-    "name": "recordChange"
-  },
-  {
-    "name": "recordChangeAndUpdateProperty"
   },
   {
     "name": "reference"
@@ -1107,6 +1098,9 @@
     "name": "saveNameToExportMap"
   },
   {
+    "name": "savePropertyDebugData"
+  },
+  {
     "name": "saveResolvedLocalsInData"
   },
   {
@@ -1134,13 +1128,13 @@
     "name": "setCurrentDirectiveDef"
   },
   {
+    "name": "setCurrentQueryIndex"
+  },
+  {
     "name": "setDirectiveDirty"
   },
   {
     "name": "setDirty"
-  },
-  {
-    "name": "setFirstTemplatePass"
   },
   {
     "name": "setFlag"
@@ -1194,6 +1188,9 @@
     "name": "shouldSearchParent"
   },
   {
+    "name": "storeBindingMetadata"
+  },
+  {
     "name": "storeCleanupFn"
   },
   {
@@ -1221,16 +1218,10 @@
     "name": "trackByIdentity"
   },
   {
-    "name": "unwrapOnChangesDirectiveWrapper"
-  },
-  {
     "name": "updateClassProp"
   },
   {
     "name": "updateContextWithBindings"
-  },
-  {
-    "name": "updateViewQuery"
   },
   {
     "name": "valueExists"

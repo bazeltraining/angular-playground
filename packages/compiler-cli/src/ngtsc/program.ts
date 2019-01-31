@@ -14,16 +14,19 @@ import {nocollapseHack} from '../transformers/nocollapse_hack';
 
 import {ComponentDecoratorHandler, DirectiveDecoratorHandler, InjectableDecoratorHandler, NgModuleDecoratorHandler, NoopReferencesRegistry, PipeDecoratorHandler, ReferencesRegistry, SelectorScopeRegistry} from './annotations';
 import {BaseDefDecoratorHandler} from './annotations/src/base_def';
+import {CycleAnalyzer, ImportGraph} from './cycles';
 import {ErrorCode, ngErrorCode} from './diagnostics';
 import {FlatIndexGenerator, ReferenceGraph, checkForPrivateExports, findFlatIndexEntryPoint} from './entry_point';
-import {ImportRewriter, NoopImportRewriter, R3SymbolsImportRewriter, Reference, TsReferenceResolver} from './imports';
+import {ImportRewriter, ModuleResolver, NoopImportRewriter, R3SymbolsImportRewriter, Reference, TsReferenceResolver} from './imports';
 import {PartialEvaluator} from './partial_evaluator';
 import {TypeScriptReflectionHost} from './reflection';
 import {HostResourceLoader} from './resource_loader';
+import {NgModuleRouteAnalyzer} from './routing';
 import {FactoryGenerator, FactoryInfo, GeneratedShimsHostWrapper, ShimGenerator, SummaryGenerator, generatedFactoryTransform} from './shims';
 import {ivySwitchTransform} from './switch';
-import {IvyCompilation, ivyTransformFactory} from './transform';
+import {IvyCompilation, declarationTransformFactory, ivyTransformFactory} from './transform';
 import {TypeCheckContext, TypeCheckProgramHost} from './typecheck';
+import {normalizeSeparators} from './util/src/path';
 import {isDtsPath} from './util/src/typescript';
 
 export class NgtscProgram implements api.Program {
@@ -42,8 +45,11 @@ export class NgtscProgram implements api.Program {
   private entryPoint: ts.SourceFile|null;
   private exportReferenceGraph: ReferenceGraph|null = null;
   private flatIndexGenerator: FlatIndexGenerator|null = null;
+  private routeAnalyzer: NgModuleRouteAnalyzer|null = null;
 
   private constructionDiagnostics: ts.Diagnostic[] = [];
+  private moduleResolver: ModuleResolver;
+  private cycleAnalyzer: CycleAnalyzer;
 
 
   constructor(
@@ -107,8 +113,9 @@ export class NgtscProgram implements api.Program {
         });
       } else {
         const flatModuleId = options.flatModuleId || null;
+        const flatModuleOutFile = normalizeSeparators(options.flatModuleOutFile);
         this.flatIndexGenerator =
-            new FlatIndexGenerator(entryPoint, options.flatModuleOutFile, flatModuleId);
+            new FlatIndexGenerator(entryPoint, flatModuleOutFile, flatModuleId);
         generators.push(this.flatIndexGenerator);
         rootFiles.push(this.flatIndexGenerator.flatIndexPath);
       }
@@ -122,6 +129,8 @@ export class NgtscProgram implements api.Program {
         ts.createProgram(rootFiles, options, this.host, oldProgram && oldProgram.getTsProgram());
 
     this.entryPoint = entryPoint !== null ? this.tsProgram.getSourceFile(entryPoint) || null : null;
+    this.moduleResolver = new ModuleResolver(this.tsProgram, options, this.host);
+    this.cycleAnalyzer = new CycleAnalyzer(new ImportGraph(this.moduleResolver));
   }
 
   getTsProgram(): ts.Program { return this.tsProgram; }
@@ -178,9 +187,17 @@ export class NgtscProgram implements api.Program {
                           .filter(file => !file.fileName.endsWith('.d.ts'))
                           .map(file => this.compilation !.analyzeAsync(file))
                           .filter((result): result is Promise<void> => result !== undefined));
+    this.compilation.resolve();
   }
 
-  listLazyRoutes(entryRoute?: string|undefined): api.LazyRoute[] { return []; }
+  listLazyRoutes(entryRoute?: string|undefined): api.LazyRoute[] {
+    if (entryRoute !== undefined) {
+      throw new Error(
+          `Listing specific routes is unsupported for now (got query for ${entryRoute})`);
+    }
+    this.ensureAnalyzed();
+    return this.routeAnalyzer !.listLazyRoutes();
+  }
 
   getLibrarySummaries(): Map<string, api.LibrarySummary> {
     throw new Error('Method not implemented.');
@@ -200,6 +217,7 @@ export class NgtscProgram implements api.Program {
       this.tsProgram.getSourceFiles()
           .filter(file => !file.fileName.endsWith('.d.ts'))
           .forEach(file => this.compilation !.analyzeSync(file));
+      this.compilation.resolve();
     }
     return this.compilation;
   }
@@ -213,17 +231,13 @@ export class NgtscProgram implements api.Program {
   }): ts.EmitResult {
     const emitCallback = opts && opts.emitCallback || defaultEmitCallback;
 
-    this.ensureAnalyzed();
+    const compilation = this.ensureAnalyzed();
 
-    // Since there is no .d.ts transformation API, .d.ts files are transformed during write.
     const writeFile: ts.WriteFileCallback =
         (fileName: string, data: string, writeByteOrderMark: boolean,
          onError: ((message: string) => void) | undefined,
          sourceFiles: ReadonlyArray<ts.SourceFile>) => {
-          if (fileName.endsWith('.d.ts')) {
-            data = sourceFiles.reduce(
-                (data, sf) => this.compilation !.transformedDtsFor(sf.fileName, data), data);
-          } else if (this.closureCompilerEnabled && fileName.endsWith('.js')) {
+          if (this.closureCompilerEnabled && fileName.endsWith('.js')) {
             data = nocollapseHack(data);
           }
           this.host.writeFile(fileName, data, writeByteOrderMark, onError, sourceFiles);
@@ -231,7 +245,8 @@ export class NgtscProgram implements api.Program {
 
     const customTransforms = opts && opts.customTransformers;
     const beforeTransforms =
-        [ivyTransformFactory(this.compilation !, this.reflector, this.importRewriter, this.isCore)];
+        [ivyTransformFactory(compilation, this.reflector, this.importRewriter, this.isCore)];
+    const afterDeclarationsTransforms = [declarationTransformFactory(compilation)];
 
     if (this.factoryToSourceInfo !== null) {
       beforeTransforms.push(
@@ -253,6 +268,7 @@ export class NgtscProgram implements api.Program {
       customTransformers: {
         before: beforeTransforms,
         after: customTransforms && customTransforms.afterTs,
+        afterDeclarations: afterDeclarationsTransforms,
       },
     });
     return emitResult;
@@ -286,17 +302,20 @@ export class NgtscProgram implements api.Program {
       referencesRegistry = new NoopReferencesRegistry();
     }
 
+    this.routeAnalyzer = new NgModuleRouteAnalyzer(this.moduleResolver, evaluator);
+
     // Set up the IvyCompilation, which manages state for the Ivy transformer.
     const handlers = [
       new BaseDefDecoratorHandler(this.reflector, evaluator),
       new ComponentDecoratorHandler(
           this.reflector, evaluator, scopeRegistry, this.isCore, this.resourceManager,
           this.rootDirs, this.options.preserveWhitespaces || false,
-          this.options.i18nUseExternalIds !== false),
+          this.options.i18nUseExternalIds !== false, this.moduleResolver, this.cycleAnalyzer),
       new DirectiveDecoratorHandler(this.reflector, evaluator, scopeRegistry, this.isCore),
       new InjectableDecoratorHandler(this.reflector, this.isCore),
       new NgModuleDecoratorHandler(
-          this.reflector, evaluator, scopeRegistry, referencesRegistry, this.isCore),
+          this.reflector, evaluator, scopeRegistry, referencesRegistry, this.isCore,
+          this.routeAnalyzer),
       new PipeDecoratorHandler(this.reflector, evaluator, scopeRegistry, this.isCore),
     ];
 

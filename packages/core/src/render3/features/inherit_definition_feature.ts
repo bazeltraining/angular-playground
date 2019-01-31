@@ -7,6 +7,7 @@
  */
 
 import {Type} from '../../interface/type';
+import {Component} from '../../metadata/directives';
 import {fillProperties} from '../../util/property';
 import {EMPTY_ARRAY, EMPTY_OBJ} from '../empty';
 import {ComponentDef, DirectiveDef, DirectiveDefFeature, RenderFlags} from '../interfaces/definition';
@@ -60,6 +61,7 @@ export function InheritDefinitionFeature(definition: DirectiveDef<any>| Componen
     }
 
     if (baseDef) {
+      // Merge inputs and outputs
       fillProperties(definition.inputs, baseDef.inputs);
       fillProperties(definition.declaredInputs, baseDef.declaredInputs);
       fillProperties(definition.outputs, baseDef.outputs);
@@ -101,9 +103,9 @@ export function InheritDefinitionFeature(definition: DirectiveDef<any>| Componen
       const superContentQueries = superDef.contentQueries;
       if (superContentQueries) {
         if (prevContentQueries) {
-          definition.contentQueries = (dirIndex: number) => {
-            superContentQueries(dirIndex);
-            prevContentQueries(dirIndex);
+          definition.contentQueries = (directiveIndex: number) => {
+            superContentQueries(directiveIndex);
+            prevContentQueries(directiveIndex);
           };
         } else {
           definition.contentQueries = superContentQueries;
@@ -115,14 +117,15 @@ export function InheritDefinitionFeature(definition: DirectiveDef<any>| Componen
       const superContentQueriesRefresh = superDef.contentQueriesRefresh;
       if (superContentQueriesRefresh) {
         if (prevContentQueriesRefresh) {
-          definition.contentQueriesRefresh = (directiveIndex: number, queryIndex: number) => {
-            superContentQueriesRefresh(directiveIndex, queryIndex);
-            prevContentQueriesRefresh(directiveIndex, queryIndex);
+          definition.contentQueriesRefresh = (directiveIndex: number) => {
+            superContentQueriesRefresh(directiveIndex);
+            prevContentQueriesRefresh(directiveIndex);
           };
         } else {
           definition.contentQueriesRefresh = superContentQueriesRefresh;
         }
       }
+
 
       // Merge inputs and outputs
       fillProperties(definition.inputs, superDef.inputs);
@@ -139,7 +142,6 @@ export function InheritDefinitionFeature(definition: DirectiveDef<any>| Componen
       definition.doCheck = definition.doCheck || superDef.doCheck;
       definition.onDestroy = definition.onDestroy || superDef.onDestroy;
       definition.onInit = definition.onInit || superDef.onInit;
-      definition.onChanges = definition.onChanges || superDef.onChanges;
 
       // Run parent features
       const features = superDef.features;
@@ -166,7 +168,6 @@ export function InheritDefinitionFeature(definition: DirectiveDef<any>| Componen
         definition.doCheck = definition.doCheck || superPrototype.ngDoCheck;
         definition.onDestroy = definition.onDestroy || superPrototype.ngOnDestroy;
         definition.onInit = definition.onInit || superPrototype.ngOnInit;
-        definition.onChanges = definition.onChanges || superPrototype.ngOnChanges;
       }
     }
 

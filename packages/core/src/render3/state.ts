@@ -11,7 +11,7 @@ import {executeHooks} from './hooks';
 import {ComponentDef, DirectiveDef} from './interfaces/definition';
 import {TElementNode, TNode, TNodeFlags, TViewNode} from './interfaces/node';
 import {LQueries} from './interfaces/query';
-import {BINDING_INDEX, CONTEXT, DECLARATION_VIEW, FLAGS, HOST_NODE, LView, LViewFlags, OpaqueViewState, QUERIES, TVIEW} from './interfaces/view';
+import {BINDING_INDEX, CONTEXT, DECLARATION_VIEW, FLAGS, HOST_NODE, InitPhaseState, LView, LViewFlags, OpaqueViewState, QUERIES, TVIEW} from './interfaces/view';
 import {isContentQueryHost} from './util';
 
 
@@ -229,17 +229,6 @@ export function setCheckNoChangesMode(mode: boolean): void {
   checkNoChangesMode = mode;
 }
 
-/** Whether or not this is the first time the current view has been processed. */
-let firstTemplatePass = true;
-
-export function getFirstTemplatePass(): boolean {
-  return firstTemplatePass;
-}
-
-export function setFirstTemplatePass(value: boolean): void {
-  firstTemplatePass = value;
-}
-
 /**
  * The root index from which pure function instructions should calculate their binding
  * indices. In component views, this is TView.bindingStartIndex. In a host binding
@@ -254,6 +243,21 @@ export function getBindingRoot() {
 
 export function setBindingRoot(value: number) {
   bindingRootIndex = value;
+}
+
+/**
+ * Current index of a View or Content Query which needs to be processed next.
+ * We iterate over the list of Queries and increment current query index at every step.
+ */
+let currentQueryIndex: number = 0;
+
+export function getCurrentQueryIndex(): number {
+  // top level variables should not be exported for performance reasons (PERF_NOTES.md)
+  return currentQueryIndex;
+}
+
+export function setCurrentQueryIndex(value: number): void {
+  currentQueryIndex = value;
 }
 
 /**
@@ -272,7 +276,6 @@ export function enterView(newView: LView, hostTNode: TElementNode | TViewNode | 
   const oldView = lView;
   if (newView) {
     const tView = newView[TVIEW];
-    firstTemplatePass = tView.firstTemplatePass;
     bindingRootIndex = tView.bindingStartIndex;
   }
 
@@ -321,11 +324,12 @@ export function leaveView(newView: LView): void {
     lView[FLAGS] &= ~LViewFlags.CreationMode;
   } else {
     try {
-      executeHooks(lView, tView.viewHooks, tView.viewCheckHooks, checkNoChangesMode);
+      executeHooks(
+          lView, tView.viewHooks, tView.viewCheckHooks, checkNoChangesMode,
+          InitPhaseState.AfterViewInitHooksToBeRun);
     } finally {
       // Views are clean and in update mode after being checked, so these bits are cleared
       lView[FLAGS] &= ~(LViewFlags.Dirty | LViewFlags.FirstLViewPass);
-      lView[FLAGS] |= LViewFlags.RunInit;
       lView[BINDING_INDEX] = tView.bindingStartIndex;
     }
   }

@@ -6,9 +6,8 @@
  * found in the LICENSE file at https://angular.io/license
  */
 
-import {SimpleChanges, ViewEncapsulation} from '../../core';
+import {ViewEncapsulation} from '../../core';
 import {Type} from '../../interface/type';
-
 import {CssSelectorList} from './projection';
 
 
@@ -85,14 +84,14 @@ export interface BaseDef<T> {
    * @deprecated This is only here because `NgOnChanges` incorrectly uses declared name instead of
    * public or minified name.
    */
-  readonly declaredInputs: {[P in keyof T]: P};
+  readonly declaredInputs: {[P in keyof T]: string};
 
   /**
    * A dictionary mapping the outputs' minified property names to their public API names, which
    * are their aliases if any, or their original unminified property names
    * (as in `@Output('alias') propertyName: any;`).
    */
-  readonly outputs: {[P in keyof T]: P};
+  readonly outputs: {[P in keyof T]: string};
 }
 
 /**
@@ -135,15 +134,15 @@ export interface DirectiveDef<T> extends BaseDef<T> {
   contentQueries: ((directiveIndex: number) => void)|null;
 
   /** Refreshes content queries associated with directives in a given view */
-  contentQueriesRefresh: ((directiveIndex: number, queryIndex: number) => void)|null;
+  contentQueriesRefresh: ((directiveIndex: number) => void)|null;
 
   /** Refreshes host bindings on the associated directive. */
   hostBindings: HostBindingsFunction<T>|null;
 
   /* The following are lifecycle hooks for this component */
+  onChanges: (() => void)|null;
   onInit: (() => void)|null;
   doCheck: (() => void)|null;
-  onChanges: ((changes: SimpleChanges) => void)|null;
   afterContentInit: (() => void)|null;
   afterContentChecked: (() => void)|null;
   afterViewInit: (() => void)|null;
@@ -154,6 +153,10 @@ export interface DirectiveDef<T> extends BaseDef<T> {
    * The features applied to this directive
    */
   readonly features: DirectiveDefFeature[]|null;
+
+  setInput:
+      ((this: DirectiveDef<T>, instance: T, value: any, publicName: string,
+        privateName: string) => void)|null;
 }
 
 export type ComponentDefWithMeta<
@@ -300,11 +303,27 @@ export type PipeDefWithMeta<T, Name extends string> = PipeDef<T>;
 
 export interface DirectiveDefFeature {
   <T>(directiveDef: DirectiveDef<T>): void;
+  /**
+   * Marks a feature as something that {@link InheritDefinitionFeature} will execute
+   * during inheritance.
+   *
+   * NOTE: DO NOT SET IN ROOT OF MODULE! Doing so will result in tree-shakers/bundlers
+   * identifying the change as a side effect, and the feature will be included in
+   * every bundle.
+   */
   ngInherit?: true;
 }
 
 export interface ComponentDefFeature {
   <T>(componentDef: ComponentDef<T>): void;
+  /**
+   * Marks a feature as something that {@link InheritDefinitionFeature} will execute
+   * during inheritance.
+   *
+   * NOTE: DO NOT SET IN ROOT OF MODULE! Doing so will result in tree-shakers/bundlers
+   * identifying the change as a side effect, and the feature will be included in
+   * every bundle.
+   */
   ngInherit?: true;
 }
 
